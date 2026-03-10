@@ -7,14 +7,22 @@ from strategy import MeanReversionStrategy
 from trading212_client import Trading212Client
 
 # Set up logging for both console and file (which the dashboard can read if needed)
+file_handler = logging.FileHandler("bot.log")
+file_handler.terminator = "\n"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("bot.log"),
+        file_handler,
         logging.StreamHandler()
     ]
 )
+logger = logging.getLogger("bot")
+
+# Force immediate flush for Streamlit responsiveness
+for handler in logging.root.handlers:
+    handler.flush = lambda: [h.flush() for h in logging.root.handlers]
 logger = logging.getLogger("bot")
 
 CONFIG_FILE = "config.json"
@@ -197,6 +205,10 @@ class TradingBot:
                 self.run_cycle()
             except Exception as e:
                 logger.error(f"Unexpected error in run cycle: {e}", exc_info=True)
+                
+            # Force log flush to disk for Streamlit to read
+            for handler in logging.root.handlers:
+                handler.flush()
                 
             time.sleep(60) # 1-minute loop
 
