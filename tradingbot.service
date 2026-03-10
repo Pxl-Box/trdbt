@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading 212 Proxmox LXC Trading Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trdbt
+ExecStart=/opt/trdbt/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=tradingbot
+
+[Install]
+WantedBy=multi-user.target
