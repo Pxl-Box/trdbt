@@ -78,8 +78,8 @@ if api_key:
     except Exception as e:
         st.error(f"API Error: {e}")
 
-col1.metric("Account Equity", f"${equity_data.get('total', 0.0):.2f}")
-col2.metric("Free Cash", f"${equity_data.get('free', 0.0):.2f}")
+col1.metric("Account Equity", f"£{equity_data.get('total', 0.0):.2f}")
+col2.metric("Free Cash", f"£{equity_data.get('free', 0.0):.2f}")
 col3.metric("Status", bot_status)
 
 st.subheader("Open Positions")

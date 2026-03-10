@@ -20,11 +20,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bot")
 
-# Force immediate flush for Streamlit responsiveness
-for handler in logging.root.handlers:
-    handler.flush = lambda: [h.flush() for h in logging.root.handlers]
-logger = logging.getLogger("bot")
-
 CONFIG_FILE = "config.json"
 STATE_FILE = "bot_state.json"
 
