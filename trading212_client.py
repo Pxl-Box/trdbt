@@ -18,7 +18,9 @@ class Trading212Client:
             self.base_url = "https://demo.trading212.com/api/v0"
             
         self.headers = {
-            "Authorization": self.api_key
+            "Authorization": self.api_key,
+            "Accept": "application/json",
+            "Content-Type": "application/json"
         }
 
     def _get(self, endpoint: str) -> dict:
