@@ -27,8 +27,44 @@ api_mode = st.sidebar.selectbox("Mode", ["Practice", "Live"], index=0 if config.
 bot_status = st.sidebar.radio("Bot Status", ["RUNNING", "PAUSED", "LOCKED"], 
                               index=["RUNNING", "PAUSED", "LOCKED"].index(config.get("bot_status", "LOCKED")))
 
-tickers_str = st.sidebar.text_input("Tickers (comma separated)", value=",".join(config.get("tickers", [])))
-tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()]
+if "tickers" not in st.session_state:
+    st.session_state.tickers = config.get("tickers", [])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Ticker Management")
+tickers = st.sidebar.multiselect(
+    "Active Tickers (Click X to view)", 
+    options=st.session_state.tickers, 
+    default=st.session_state.tickers
+)
+if tickers != st.session_state.tickers:
+    st.session_state.tickers = tickers
+
+search_q = st.sidebar.text_input("Search Yahoo Finance (e.g. Gold, Apple)", "")
+if search_q:
+    import requests
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={search_q}"
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        quotes = r.json().get('quotes', [])
+        found = [f"{q['symbol']} - {q.get('shortname', 'Unknown')}" for q in quotes if 'symbol' in q]
+            
+        if found:
+            selected_search = st.sidebar.selectbox("Search Results", found)
+            if st.sidebar.button("Add Ticker"):
+                symbol = selected_search.split(" ")[0]
+                if symbol not in st.session_state.tickers:
+                    st.session_state.tickers.append(symbol)
+                    try:
+                        st.rerun()
+                    except AttributeError:
+                        st.experimental_rerun()
+        else:
+            st.sidebar.info("No results found.")
+    except Exception as e:
+        st.sidebar.error("Search failed.")
+
+st.sidebar.markdown("---")
 
 preset_mode = st.sidebar.selectbox(
     "Strategy Preset", 
