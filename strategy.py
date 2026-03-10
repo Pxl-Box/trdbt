@@ -64,9 +64,13 @@ class MeanReversionStrategy:
         latest = df.iloc[-1]
         previous = df.iloc[-2]
         
+        # Dynamically grab the BB column names since `pandas_ta` float formatting can trigger KeyError
+        bbl_col = next((c for c in bbands.columns if c.startswith('BBL_')), None)
+        bbm_col = next((c for c in bbands.columns if c.startswith('BBM_')), None)
+        
         current_price = latest['Close']
-        lower_band = latest[f'BBL_{self.bb_length}_{self.bb_std}']
-        basis = latest[f'BBM_{self.bb_length}_{self.bb_std}'] # Middle band
+        lower_band = latest[bbl_col] if bbl_col else current_price
+        basis = latest[bbm_col] if bbm_col else current_price # Middle band
         rsi = latest['RSI']
         atr = latest['ATR']
         
