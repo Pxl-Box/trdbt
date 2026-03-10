@@ -100,9 +100,9 @@ if client:
 st.subheader("Bot Logs")
 try:
     with open("bot.log", "r") as f:
-        # Read the last 20 lines
+        # Read the last 20 lines and reverse them so newest is at the top
         lines = f.readlines()
-        log_content = "".join(lines[-20:])
+        log_content = "".join(reversed(lines[-20:]))
     st.text_area("Recent Logs", log_content, height=300)
     st.button("Refresh Logs")
 except FileNotFoundError:
