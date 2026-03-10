@@ -31,6 +31,8 @@ class Trading212Client:
             return response.json()
         except Exception as e:
             logger.error(f"Error GET {endpoint}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response: {e.response.text}")
             return {}
 
     def _post(self, endpoint: str, payload: dict) -> dict:
