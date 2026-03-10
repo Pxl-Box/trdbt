@@ -1,5 +1,5 @@
 pandas
-https://github.com/twopirllc/pandas-ta/archive/development.zip
+https://github.com/twopirllc/pandas-ta/archive/refs/heads/main.zip
 streamlit
 requests
 numpy
