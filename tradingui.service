@@ -1,17 +1,17 @@
 [Unit]
-Description=Trading 212 Proxmox LXC Trading Daemon
+Description=Trading 212 Streamlit Dashboard
 After=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/trdbt
-ExecStart=/opt/trdbt/venv/bin/python bot.py
+ExecStart=/opt/trdbt/venv/bin/streamlit run app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true
 Restart=always
 RestartSec=5
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=tradingbot
+SyslogIdentifier=tradingui
 
 [Install]
 WantedBy=multi-user.target
