@@ -9,7 +9,7 @@ class Trading212Client:
     Supports both Practice and Live environments.
     """
     def __init__(self, api_key: str, mode: str = "Practice"):
-        self.api_key = api_key
+        self.api_key = api_key.strip()
         self.mode = mode
         
         if mode.lower() == "live":
