@@ -21,6 +21,7 @@ config = load_config()
 st.sidebar.title("Bot Settings")
 
 api_key = st.sidebar.text_input("Trading 212 API Key", value=config.get("api_key", ""), type="password")
+api_secret = st.sidebar.text_input("Trading 212 Secret Key", value=config.get("api_secret", ""), type="password")
 api_mode = st.sidebar.selectbox("Mode", ["Practice", "Live"], index=0 if config.get("api_mode") == "Practice" else 1)
 
 bot_status = st.sidebar.radio("Bot Status", ["RUNNING", "PAUSED", "LOCKED"], 
@@ -48,6 +49,7 @@ else:
 
 if st.sidebar.button("Save Configuration"):
     config["api_key"] = api_key
+    config["api_secret"] = api_secret
     config["api_mode"] = api_mode
     config["bot_status"] = bot_status
     config["tickers"] = tickers
@@ -71,8 +73,8 @@ col1, col2, col3 = st.columns(3)
 # Test Connection and Fetch Stats
 client = None
 equity_data = {"free": 0.0, "total": 0.0}
-if api_key:
-    client = Trading212Client(api_key, api_mode)
+if api_key and api_secret:
+    client = Trading212Client(api_key, api_secret, api_mode)
     try:
         equity_data = client.get_account_cash()
     except Exception as e:

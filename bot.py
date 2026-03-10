@@ -66,12 +66,13 @@ class TradingBot:
     def init_clients(self):
         """ Initialize or Re-initialize API Clients if config changed. """
         api_key = self.config.get("api_key", "")
+        api_secret = self.config.get("api_secret", "")
         mode = self.config.get("api_mode", "Practice")
         
-        if not api_key:
+        if not api_key or not api_secret:
             return False
             
-        self.client = Trading212Client(api_key, mode)
+        self.client = Trading212Client(api_key, api_secret, mode)
         
         # Initialize strategy with current config params
         self.strategy = MeanReversionStrategy(

@@ -1,5 +1,6 @@
 import requests
 import logging
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -8,17 +9,20 @@ class Trading212Client:
     Native REST Client for the Trading 212 V0 Equity API.
     Supports both Practice and Live environments.
     """
-    def __init__(self, api_key: str, mode: str = "Practice"):
+    def __init__(self, api_key: str, api_secret: str, mode: str = "Practice"):
         self.api_key = api_key.strip()
+        self.api_secret = api_secret.strip()
         self.mode = mode
         
         if mode.lower() == "live":
             self.base_url = "https://live.trading212.com/api/v0"
         else:
             self.base_url = "https://demo.trading212.com/api/v0"
-            
+        auth_string = f"{self.api_key}:{self.api_secret}"
+        encoded_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+        
         self.headers = {
-            "Authorization": self.api_key,
+            "Authorization": f"Basic {encoded_auth}",
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
