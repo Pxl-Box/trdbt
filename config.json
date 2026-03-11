@@ -2,7 +2,7 @@
     "api_key": "",
     "api_mode": "Practice",
     "bot_status": "LOCKED",
-    "tickers": ["SPY", "QQQ"],
+    "tickers": [],
     "preset_mode": "Conservative",
     "bb_length": 20,
     "bb_std": 2.0,
