@@ -32,14 +32,46 @@ if "tickers" not in st.session_state:
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Ticker Management")
-tickers = st.sidebar.multiselect(
-    "Active Tickers (Click X to view)", 
-    options=st.session_state.tickers, 
-    default=st.session_state.tickers
-)
-if tickers != st.session_state.tickers:
-    st.session_state.tickers = tickers
 
+# Hide tickers in an expander rather than a massive multiselect list
+with st.sidebar.expander("View & Remove Tickers"):
+    if not st.session_state.tickers:
+        st.write("No configured tickers.")
+    else:
+        st.write(f"Tracking {len(st.session_state.tickers)} tickers.")
+        ticker_to_remove = st.selectbox("Select a Ticker to Remove", [""] + st.session_state.tickers)
+        if st.button("Remove Ticker") and ticker_to_remove:
+            st.session_state.tickers.remove(ticker_to_remove)
+            try:
+                st.rerun()
+            except AttributeError:
+                st.experimental_rerun()
+
+# Import & Export Tickers via JSON file
+import_file = st.sidebar.file_uploader("Import Tickers (JSON)", type=["json"])
+if import_file is not None:
+    try:
+        imported_tickers = json.load(import_file)
+        if isinstance(imported_tickers, list):
+            # Merge and remove duplicates, keeping original order where possible
+            new_list = list(dict.fromkeys(st.session_state.tickers + imported_tickers))
+            st.session_state.tickers = new_list
+            st.sidebar.success(f"Imported {len(imported_tickers)} tickers.")
+        else:
+            st.sidebar.error("Invalid JSON format. Expected a list of strings.")
+    except Exception as e:
+        st.sidebar.error("Error reading JSON.")
+
+if st.session_state.tickers:
+    st.sidebar.download_button(
+        label="Export Tickers (JSON)",
+        data=json.dumps(st.session_state.tickers, indent=4),
+        file_name="trdbt_tickers.json",
+        mime="application/json"
+    )
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Search & Add Tickers")
 search_q = st.sidebar.text_input("Search Yahoo Finance (e.g. Gold, Apple)", "")
 if search_q:
     import requests
@@ -64,19 +96,34 @@ if search_q:
     except Exception as e:
         st.sidebar.error("Search failed.")
 
+tickers = st.session_state.tickers
 st.sidebar.markdown("---")
 
-preset_mode = st.sidebar.selectbox(
-    "Strategy Preset", 
-    ["Conservative", "Aggressive", "Manual Custom"], 
-    index=["Conservative", "Aggressive", "Manual Custom"].index(config.get("preset_mode", "Conservative"))
-)
+preset_options = [
+    "Ultra Conservative", 
+    "Conservative", 
+    "Moderate", 
+    "Aggressive", 
+    "Ultra Aggressive", 
+    "Manual Custom"
+]
+
+current_preset = config.get("preset_mode", "Conservative")
+preset_index = preset_options.index(current_preset) if current_preset in preset_options else len(preset_options)-1
+
+preset_mode = st.sidebar.selectbox("Strategy Preset", preset_options, index=preset_index)
 
 # Preset definitions
-if preset_mode == "Conservative":
+if preset_mode == "Ultra Conservative":
+    bb_length, bb_std, rsi_length, rsi_threshold = 20, 3.0, 14, 20
+elif preset_mode == "Conservative":
     bb_length, bb_std, rsi_length, rsi_threshold = 20, 2.5, 14, 25
+elif preset_mode == "Moderate":
+    bb_length, bb_std, rsi_length, rsi_threshold = 20, 2.0, 14, 30
 elif preset_mode == "Aggressive":
-    bb_length, bb_std, rsi_length, rsi_threshold = 20, 2.0, 14, 40
+    bb_length, bb_std, rsi_length, rsi_threshold = 20, 1.5, 14, 40
+elif preset_mode == "Ultra Aggressive":
+    bb_length, bb_std, rsi_length, rsi_threshold = 10, 1.0, 7, 50
 else:
     bb_length = st.sidebar.number_input("BB Length", value=config.get("bb_length", 20))
     bb_std = st.sidebar.number_input("BB StdDev", value=config.get("bb_std", 2.0), step=0.1)
