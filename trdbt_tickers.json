@@ -1,31 +1,21 @@
-[
-    "SPY",
-    "QQQ",
-    "NVDA",
-    "MSFT",
-    "GOOG",
-    "PLTR",
-    "AMD",
-    "TSM",
-    "AI",
-    "SNPS",
-    "IONQ",
-    "QBTS",
-    "RGTI",
-    "IBM",
-    "HON",
-    "ICLN",
-    "ENPH",
-    "SEDG",
-    "FSLR",
-    "TAN",
-    "NEE",
-    "BEP",
-    "PLUG",
-    "MSTR",
-    "MARA",
-    "RIOT",
-    "COIN",
-    "CLSK",
-    "BTC-USD"
-]
+{
+    "description": "Comprehensive portfolio tickers for trdbt.",
+    "categories": {
+        "Green Energy": ["ENPH_US_EQ", "SEDG_US_EQ", "FSLR_US_EQ", "ICLN_US_EQ", "PLUG_US_EQ"],
+        "AI": ["NVDA_US_EQ", "MSFT_US_EQ", "GOOGL_US_EQ", "AI_US_EQ", "BOTZ_US_EQ", "AVGO_US_EQ"],
+        "Quantum Computing": ["IONQ_US_EQ", "RGTI_US_EQ", "QUBT_US_EQ"],
+        "Big Tech": ["AAPL_US_EQ", "AMZN_US_EQ", "META_US_EQ", "TSLA_US_EQ", "NFLX_US_EQ"],
+        "Crypto Related": ["COIN_US_EQ", "MARA_US_EQ", "RIOT_US_EQ", "MSTR_US_EQ", "IBIT_US_EQ", "FBTC_US_EQ"],
+        "Metals (Gold/Silver)": ["GLD_US_EQ", "SLV_US_EQ", "NEM_US_EQ", "PAAS_US_EQ", "GDX_US_EQ"],
+        "ETFs & Broad Market": ["SPY_US_EQ", "QQQ_US_EQ", "XLE_US_EQ", "XLK_US_EQ", "ARKK_US_EQ", "VUSA_US_EQ", "DIA_US_EQ"]
+    },
+    "combined_list": [
+        "ENPH_US_EQ", "SEDG_US_EQ", "FSLR_US_EQ", "ICLN_US_EQ", "PLUG_US_EQ",
+        "NVDA_US_EQ", "MSFT_US_EQ", "GOOGL_US_EQ", "AI_US_EQ", "BOTZ_US_EQ", "AVGO_US_EQ",
+        "IONQ_US_EQ", "RGTI_US_EQ", "QUBT_US_EQ",
+        "AAPL_US_EQ", "AMZN_US_EQ", "META_US_EQ", "TSLA_US_EQ", "NFLX_US_EQ",
+        "COIN_US_EQ", "MARA_US_EQ", "RIOT_US_EQ", "MSTR_US_EQ", "IBIT_US_EQ", "FBTC_US_EQ",
+        "GLD_US_EQ", "SLV_US_EQ", "NEM_US_EQ", "PAAS_US_EQ", "GDX_US_EQ",
+        "SPY_US_EQ", "QQQ_US_EQ", "XLE_US_EQ", "XLK_US_EQ", "ARKK_US_EQ", "VUSA_US_EQ", "DIA_US_EQ"
+    ]
+}
