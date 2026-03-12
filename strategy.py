@@ -99,3 +99,23 @@ class MeanReversionStrategy:
             }
 
         return {"signal": "WAIT", "price": current_price, "reason": "No conditions met"}
+
+    def get_current_atr(self, ticker: str, multiplier: float = 1.0) -> float:
+        """
+        Returns the latest ATR value for the ticker, scaled by multiplier.
+        Used by the bot to calculate an ATR-aware stop-loss for imported positions.
+        Returns 0.0 if data is unavailable so the caller falls back to pct-based SL.
+        """
+        df = self.get_historical_data(ticker)
+        if df.empty or len(df) < 15:
+            return 0.0
+        try:
+            atr_series = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+            latest_atr = float(atr_series.iloc[-1])
+            # Guard against NaN
+            if latest_atr != latest_atr:
+                return 0.0
+            return round(latest_atr * multiplier, 4)
+        except Exception as e:
+            logger.warning(f"ATR fetch failed for {ticker}: {e}")
+            return 0.0

@@ -1,55 +1,98 @@
+import time
 import requests
 import logging
 import base64
 
 logger = logging.getLogger(__name__)
 
+# Transient HTTP status codes worth retrying
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
 class Trading212Client:
     """
     Native REST Client for the Trading 212 V0 Equity API.
     Supports both Practice and Live environments.
+
+    All requests are retried up to `max_retries` times on transient errors
+    (rate-limit 429, or 5xx server errors) with exponential back-off.
     """
-    def __init__(self, api_key: str, api_secret: str, mode: str = "Practice"):
+
+    def __init__(self, api_key: str, api_secret: str, mode: str = "Practice",
+                 max_retries: int = 3, retry_delay: float = 2.0):
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()
         self.mode = mode
-        
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+
         if mode.lower() == "live":
             self.base_url = "https://live.trading212.com/api/v0"
         else:
             self.base_url = "https://demo.trading212.com/api/v0"
+
         auth_string = f"{self.api_key}:{self.api_secret}"
         encoded_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
-        
+
         self.headers = {
             "Authorization": f"Basic {encoded_auth}",
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
 
-    def _get(self, endpoint: str) -> dict:
+    # ── Internal HTTP helpers ─────────────────────────────────────────────────
+
+    def _request(self, method: str, endpoint: str, **kwargs) -> dict:
+        """
+        Central request dispatcher with retry logic.
+        Retries on 429 (rate-limit) and 5xx (server error) up to max_retries times.
+        Returns {} on permanent failure to keep callers safe.
+        """
         url = f"{self.base_url}{endpoint}"
-        try:
-            response = requests.get(url, headers=self.headers, timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Error GET {endpoint}: {e}")
-            if hasattr(e, 'response') and e.response is not None:
+        last_exc = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = requests.request(method, url, headers=self.headers,
+                                        timeout=10, **kwargs)
+                if resp.status_code in _RETRY_STATUSES and attempt < self.max_retries:
+                    wait = self.retry_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        f"[{method} {endpoint}] HTTP {resp.status_code} – "
+                        f"retrying in {wait:.0f}s (attempt {attempt}/{self.max_retries})"
+                    )
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"Error {method} {endpoint}: {e}")
                 logger.error(f"Response: {e.response.text}")
-            return {}
+                last_exc = e
+                break
+            except Exception as e:
+                logger.error(f"Error {method} {endpoint}: {e}")
+                last_exc = e
+                break
+        return {}
+
+    def _get(self, endpoint: str) -> dict:
+        return self._request("GET", endpoint)
 
     def _post(self, endpoint: str, payload: dict) -> dict:
+        logger.debug(f"POST {endpoint} payload: {payload}")
+        return self._request("POST", endpoint, json=payload)
+
+    def _delete(self, endpoint: str) -> bool:
         url = f"{self.base_url}{endpoint}"
         try:
-            response = requests.post(url, json=payload, headers=self.headers, timeout=10)
-            response.raise_for_status()
-            return response.json()
+            resp = requests.delete(url, headers=self.headers, timeout=10)
+            resp.raise_for_status()
+            return True
         except Exception as e:
-            logger.error(f"Error POST {endpoint}: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response: {e.response.text}")
-            return {}
+            logger.error(f"Error DELETE {endpoint}: {e}")
+            return False
+
+    # ── Account ───────────────────────────────────────────────────────────────
 
     def get_account_cash(self) -> dict:
         """
@@ -59,66 +102,95 @@ class Trading212Client:
         return self._get("/equity/account/cash")
 
     def get_open_positions(self) -> list:
-        """ Returns a list of currently open positions. """
-        return self._get("/equity/portfolio")
+        """Returns a list of currently open positions."""
+        result = self._get("/equity/portfolio")
+        return result if isinstance(result, list) else []
 
     def get_active_orders(self) -> list:
-        """ Returns a list of pending orders. """
-        return self._get("/equity/orders")
+        """Returns a list of pending / working orders."""
+        result = self._get("/equity/orders")
+        return result if isinstance(result, list) else []
 
-    def place_limit_order(self, ticker: str, quantity: float, limit_price: float, stop_price: float = None, take_profit: float = None) -> dict:
+    def get_order_by_id(self, order_id) -> dict:
+        """Fetch a single order by ID to check its fill status."""
+        return self._get(f"/equity/orders/{order_id}")
+
+    # ── Order Placement ───────────────────────────────────────────────────────
+
+    def place_limit_order(self, ticker: str, quantity: float,
+                          limit_price: float) -> dict:
         """
-        Submits a Limit buy order with optional bracket Stop Loss and Take Profit.
+        Submits a Limit BUY order.
+
+        The Trading212 v0 /equity/orders/limit endpoint only accepts:
+          ticker, quantity, limitPrice, timeValidity.
+        Stop-loss must be placed as a separate order after the buy fills.
         """
         payload = {
             "ticker": ticker,
-            "quantity": quantity,
-            "limitPrice": round(limit_price, 4), # Ensure decimal formatting
+            "quantity": quantity,                  # positive = BUY
+            "limitPrice": round(limit_price, 4),
             "timeValidity": "DAY"
         }
-        
-        # Trading 212 API might accept stopPrice and limitPrice on entry, or we might need secondary orders.
-        # Assuming typical v0 schema for attached orders if supported, otherwise just placed simple limit
-        
-        if stop_price:
-            payload["stopPrice"] = round(stop_price, 4)
-            
-        # The exact shape of the payload for Take Profit might vary; for safety we just send the standard bracket params.
-        # If API rejects, we can handle it.
-        
         return self._post("/equity/orders/limit", payload)
-        
+
+    def place_stop_order(self, ticker: str, quantity: float,
+                         stop_price: float) -> dict:
+        """
+        Places a standalone Stop (stop-market) SELL order.
+        Used as the bracket stop-loss leg after a limit buy fills.
+        quantity should be the number of shares purchased (sign is forced negative).
+        """
+        payload = {
+            "ticker": ticker,
+            "quantity": -abs(quantity),            # negative = SELL
+            "stopPrice": round(stop_price, 4),
+            "timeValidity": "GTC"
+        }
+        return self._post("/equity/orders/stop", payload)
+
+    def place_market_sell(self, ticker: str, quantity: float) -> dict:
+        """
+        Closes an open position immediately at market.
+        Used for position-aware SELL signals and Kill Switch.
+        """
+        payload = {
+            "ticker": ticker,
+            "quantity": -abs(quantity),            # negative = SELL
+            "timeValidity": "DAY"
+        }
+        return self._post("/equity/orders/market", payload)
+
+    # ── Order Management ──────────────────────────────────────────────────────
+
+    def cancel_order(self, order_id) -> bool:
+        """Cancel a single order by ID."""
+        return self._delete(f"/equity/orders/{order_id}")
+
     def cancel_all_orders(self) -> bool:
-        """ Cancels all open active orders (used in Kill Switch). """
+        """Cancels all open active orders (used in Kill Switch)."""
         orders = self.get_active_orders()
         success = True
         for order in orders:
-            try:
-                order_id = order.get('id')
-                url = f"{self.base_url}/equity/orders/{order_id}"
-                requests.delete(url, headers=self.headers, timeout=10)
-            except Exception as e:
-                logger.error(f"Failed to cancel order {order_id}: {e}")
+            order_id = order.get('id')
+            if not self.cancel_order(order_id):
+                logger.error(f"Failed to cancel order {order_id}")
                 success = False
         return success
-    
+
     def market_sell_all_positions(self) -> bool:
-        """ 
-        Closes all positions at market price.
+        """
+        Closes all open positions at market price.
         Used exclusively for the Global Kill Switch.
         """
         positions = self.get_open_positions()
         success = True
         for pos in positions:
             ticker = pos.get('ticker')
-            quantity = pos.get('quantity')
+            quantity = pos.get('quantity', 0)
             if quantity > 0:
-                payload = {
-                    "ticker": ticker,
-                    "quantity": -quantity, # Negative for sell
-                    "timeValidity": "DAY"
-                }
-                res = self._post("/equity/orders/market", payload)
+                res = self.place_market_sell(ticker, quantity)
                 if not res:
+                    logger.error(f"Failed to market-sell {ticker}")
                     success = False
         return success

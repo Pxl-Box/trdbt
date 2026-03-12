@@ -10,5 +10,8 @@
     "rsi_threshold": 30,
     "capital_utilization_pct": 0.95,
     "kill_switch_drop_pct": 0.05,
-    "stop_loss_pct": 0.02
+    "stop_loss_pct": 0.02,
+    "max_open_positions": 5,
+    "order_fill_timeout_secs": 60,
+    "per_ticker_cooldown_mins": 30
 }
