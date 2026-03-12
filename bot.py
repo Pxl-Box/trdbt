@@ -33,6 +33,11 @@ logging.root.setLevel(logging.DEBUG)
 logging.root.addHandler(_file_handler)
 logging.root.addHandler(_console_handler)
 
+# Suppress noisy DEBUG output from third-party libraries.
+# These produce hundreds of lines per cycle and drown out real bot events.
+for _noisy_lib in ("yfinance", "urllib3", "peewee", "hpack", "httpx"):
+    logging.getLogger(_noisy_lib).setLevel(logging.WARNING)
+
 logger = logging.getLogger("bot")
 
 # ── Ticker Helpers ─────────────────────────────────────────────────────────────
@@ -96,7 +101,12 @@ class TradingBot:
                     return s
             except Exception:
                 pass
-        return {"peak_equity": 0.0, "open_trades": {}, "cooldowns": {}}
+        return {
+            "peak_equity":   0.0,
+            "open_trades":   {},
+            "pending_orders": {},   # order_id -> {ticker, qty, sl_price, t212_ticker}
+            "cooldowns":     {}
+        }
 
     def save_state(self):
         try:
@@ -234,6 +244,61 @@ class TradingBot:
             if trade and trade.get('sl_order_id') is None:
                 self.place_missing_stop_loss(short_ticker, trade)
 
+    def resume_pending_orders(self):
+        """
+        Called at the start of every cycle.
+        Checks every pending buy order (tracked by ID) against the live API:
+
+          FILLED    → promote to open_trades, place stop-loss, remove from pending
+          CANCELLED/REJECTED/EXPIRED → clean up, remove from pending
+          still WORKING/PLACED       → leave it; already_in_trade() will skip a new BUY
+
+        This prevents the bot from placing a second buy on restart when a limit
+        order from the previous run is still live on the exchange.
+        """
+        pending = self.state.get("pending_orders", {})
+        if not pending:
+            return
+
+        for order_id, meta in list(pending.items()):
+            try:
+                order   = self.client.get_order_by_id(order_id)
+                status  = order.get("status", "").upper()
+                ticker  = meta.get("ticker", "?")
+                t212    = meta.get("t212_ticker", ticker)
+                qty     = meta.get("qty", 0)
+                sl_price= meta.get("sl_price", 0.0)
+
+                logger.info(f"[resume] Pending order {order_id} ({ticker}) status={status}")
+
+                if status == "FILLED":
+                    # Order filled during downtime — promote and place SL
+                    logger.info(f"[resume] {ticker} filled during restart gap. Placing SL @ ${sl_price:.4f}")
+                    sl_res = self.client.place_stop_order(t212, qty, sl_price)
+                    if sl_res and sl_res.get('id'):
+                        self.state.setdefault("open_trades", {})[ticker] = {
+                            "qty":         qty,
+                            "entry_price": meta.get("entry_price", 0.0),
+                            "sl_order_id": sl_res['id'],
+                            "sl_price":    sl_price,
+                            "t212_ticker": t212
+                        }
+                        logger.info(f"[resume] SL placed for {ticker}. SL ID: {sl_res['id']}")
+                    else:
+                        logger.error(f"[resume] SL FAILED for {ticker} after fill! Manual SL at ${sl_price:.4f} needed.")
+                    del pending[order_id]
+
+                elif status in ("CANCELLED", "REJECTED", "EXPIRED", ""):
+                    logger.info(f"[resume] Removing stale pending order {order_id} ({ticker}, status={status}).")
+                    del pending[order_id]
+
+                # WORKING / PLACED / PARTIALLY_FILLED → leave in pending; skip re-buy
+
+            except Exception as e:
+                logger.error(f"[resume] Error checking pending order {order_id}: {e}")
+
+        self.save_state()
+
     def place_missing_stop_loss(self, ticker: str, trade: dict):
         """
         Calculate and place a stop-loss for a position that was imported without one.
@@ -334,17 +399,22 @@ class TradingBot:
     def already_in_trade(self, ticker: str,
                          open_positions: list, active_orders: list) -> bool:
         """
-        Returns True if:
-          - We have an open position in this ticker, OR
-          - There is a pending order for this ticker, OR
-          - We have a locally tracked open trade for it.
-        Prevents doubling into the same position.
+        Returns True if we already hold or have a pending order for this ticker.
+
+        Uses BASE symbol comparison (strips _US_EQ, _US_ETF suffixes from both sides)
+        so that orders placed by old code (bare "TSLA") and new code ("TSLA_US_EQ")
+        both match correctly and don't cause duplicate buys on restart.
         """
-        t212 = to_t212_ticker(ticker)
-        if any(p.get('ticker') == t212 for p in open_positions):
+        def base(t: str) -> str:
+            """Strip exchange suffix: TSLA_US_EQ -> TSLA"""
+            return t.split("_")[0].upper() if t else ""
+
+        our_base = base(ticker)
+
+        if any(base(p.get('ticker', '')) == our_base for p in open_positions):
             logger.info(f"[{ticker}] Already have an open position – skipping BUY.")
             return True
-        if any(o.get('ticker') == t212 for o in active_orders):
+        if any(base(o.get('ticker', '')) == our_base for o in active_orders):
             logger.info(f"[{ticker}] Already have a pending order – skipping BUY.")
             return True
         if ticker in self.state.get("open_trades", {}):
@@ -397,9 +467,8 @@ class TradingBot:
         )
         return False
 
-    def handle_buy(self, ticker: str, signal_data: dict):
+    def handle_buy(self, ticker: str, signal_data: dict, available_capital: float):
         """Full BUY flow: size → place limit → poll fill → place SL."""
-        available_capital = self.get_available_capital()
         price     = signal_data.get("price", 0.0)
         target_tp = signal_data.get("target_tp", 0.0)
 
@@ -435,6 +504,18 @@ class TradingBot:
         order_id = res['id']
         logger.info(f"[{ticker}] Limit BUY submitted. Order ID: {order_id}")
 
+        # ── Track the pending order immediately so restarts won't double-buy ──
+        stop_pct_check = self.config.get("stop_loss_pct", 0.02)
+        pending_sl     = round(limit_price * (1.0 - stop_pct_check), 4)
+        self.state.setdefault("pending_orders", {})[str(order_id)] = {
+            "ticker":       ticker,
+            "t212_ticker":  t212_ticker,
+            "qty":          quantity,
+            "entry_price":  limit_price,
+            "sl_price":     stop_loss_price,
+        }
+        self.save_state()
+
         # ── Poll for fill before attaching stop-loss ──────────────────────────
         fill_timeout = self.config.get("order_fill_timeout_secs", 60)
         filled = self.wait_for_fill(order_id, timeout_secs=fill_timeout)
@@ -450,13 +531,15 @@ class TradingBot:
                 logger.info(
                     f"[{ticker}] Stop-Loss placed. SL ID: {sl_id} @ ${stop_loss_price:.2f}"
                 )
-                # Track locally so SELL signals can act on it
+                # Promote from pending → open_trades
                 self.state.setdefault("open_trades", {})[ticker] = {
-                    "qty": quantity,
+                    "qty":         quantity,
                     "entry_price": limit_price,
                     "sl_order_id": sl_id,
+                    "sl_price":    stop_loss_price,
                     "t212_ticker": t212_ticker
                 }
+                self.state.get("pending_orders", {}).pop(str(order_id), None)
                 self.save_state()
             else:
                 logger.warning(
@@ -464,11 +547,9 @@ class TradingBot:
                     f"Manual SL at ${stop_loss_price:.2f} STRONGLY recommended!"
                 )
         else:
-            # Order placed but not filled yet – it stays as a live DAY order.
-            # Track it with no SL yet; next cycle will pick it up as an active order.
             logger.warning(
-                f"[{ticker}] Limit BUY not yet filled. "
-                f"SL will be placed after fill is confirmed."
+                f"[{ticker}] Limit BUY not yet filled after {self.config.get('order_fill_timeout_secs',60)}s. "
+                f"Order remains live on exchange. SL will be placed on next restart or when fill is confirmed."
             )
 
     def handle_sell(self, ticker: str):
@@ -555,10 +636,17 @@ class TradingBot:
         # 3. Reconcile live positions with local state (imports pre-existing trades)
         self.sync_open_trades(open_positions)
 
+        # 3b. Resume any pending orders from a previous run (prevents double-buy on restart)
+        self.resume_pending_orders()
+
         # 4. Max-positions guard for buys
         positions_full = self.at_max_positions(open_positions, active_orders)
 
-        # 5. Iterate tickers
+        # 5. Fetch available capital ONCE per cycle (avoids per-ticker 429 rate-limits)
+        available_capital = self.get_available_capital()
+        logger.info(f"Available capital this cycle: £{available_capital:.2f}")
+
+        # 6. Iterate tickers
         tickers = self.config.get("tickers", [])
         for ticker in tickers:
             logger.info(f"Analyzing {ticker}...")
@@ -580,7 +668,9 @@ class TradingBot:
                 elif self.already_in_trade(ticker, open_positions, active_orders):
                     pass  # already logged inside already_in_trade
                 else:
-                    self.handle_buy(ticker, signal_data)
+                    self.handle_buy(ticker, signal_data, available_capital)
+                    # Refresh capital after a buy attempt so next ticker sees updated balance
+                    available_capital = self.get_available_capital()
 
             elif signal == "SELL":
                 self.handle_sell(ticker)
