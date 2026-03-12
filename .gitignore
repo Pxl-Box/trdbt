@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+.env/
+
+# Bot runtime files (contain API keys / live state — never commit these)
+config.json
+bot_state.json
+
+# Logs
+bot.log
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
