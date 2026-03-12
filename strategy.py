@@ -81,12 +81,30 @@ class MeanReversionStrategy:
             logger.warning(f"BLACK SWAN AVOIDED: {ticker} candle range {candle_range:.2f} > 3x ATR ({atr:.2f})")
             return {"signal": "BLOCK", "reason": "High Volatility Black Swan"}
 
+        # Volume Confirmation Filter
+        # Skip signals where volume is below a threshold of the rolling average.
+        # Low volume = low conviction; the move may not be real.
+        if 'Volume' in df.columns:
+            avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
+            min_vol_pct = getattr(self, 'volume_min_pct', 0.8)
+            if avg_volume and avg_volume > 0 and latest['Volume'] < avg_volume * min_vol_pct:
+                logger.info(
+                    f"[{ticker}] Volume too low ({latest['Volume']:.0f} < "
+                    f"{avg_volume * min_vol_pct:.0f} = {min_vol_pct*100:.0f}% of avg). Skipping signal."
+                )
+                return {"signal": "WAIT", "price": current_price, "reason": "Low volume – no conviction"}
+
+
         # Entry Logic: Price < Lower Band AND RSI < threshold
         if current_price < lower_band and rsi < self.rsi_threshold:
+            bb_pct_below = ((lower_band - current_price) / lower_band) * 100
             return {
-                "signal": "BUY",
-                "price": current_price,
-                "target_tp": basis, # Take profit at the mean
+                "signal":      "BUY",
+                "price":       current_price,
+                "target_tp":   basis, # Take profit at the mean
+                "rsi":         float(rsi),
+                "bb_pct_below": float(bb_pct_below),  # % below lower band — higher = stronger
+                "atr":         float(atr),
                 "reason": f"Price ({current_price:.2f}) < BB Lower ({lower_band:.2f}) & RSI ({rsi:.2f}) < {self.rsi_threshold}"
             }
             

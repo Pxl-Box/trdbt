@@ -472,23 +472,24 @@ class TradingBot:
         price     = signal_data.get("price", 0.0)
         target_tp = signal_data.get("target_tp", 0.0)
 
-        if price <= 0 or available_capital < price:
+        min_investment = self.config.get("min_investment_amount", 1.0)
+        if price <= 0 or available_capital < min_investment:
             logger.info(
-                f"[{ticker}] Insufficient capital for 1 share "
-                f"(available={available_capital:.2f}, price={price:.2f})."
+                f"[{ticker}] Allocation £{available_capital:.2f} below minimum £{min_investment:.2f} – skipping."
             )
             return
 
-        quantity       = math.floor(available_capital / price)
-        limit_price    = price
-        stop_pct       = self.config.get("stop_loss_pct", 0.02)
+        # Trading 212 supports fractional shares – round to 4dp for precision
+        quantity        = round(available_capital / price, 4)
+        limit_price     = price
+        stop_pct        = self.config.get("stop_loss_pct", 0.02)
         stop_loss_price = round(limit_price * (1.0 - stop_pct), 4)
-        t212_ticker    = to_t212_ticker(ticker)
+        t212_ticker     = to_t212_ticker(ticker)
 
         logger.info(
             f"[{ticker}] Placing Limit BUY | t212={t212_ticker} | "
-            f"Qty={quantity} @ ${limit_price:.2f} | "
-            f"SL=${stop_loss_price:.2f} | TP=${target_tp:.2f}"
+            f"Qty={quantity} (fractional) @ £{limit_price:.4f} | "
+            f"SL=£{stop_loss_price:.4f} | TP=£{target_tp:.4f}"
         )
 
         res = self.client.place_limit_order(
@@ -600,6 +601,160 @@ class TradingBot:
         )
         self.save_state()
 
+    # ── Market Regime Filter ────────────────────────────────────────────────────
+
+    def is_market_bearish(self) -> bool:
+        """
+        Returns True if the broad market is in a confirmed downtrend.
+
+        Checks whether the regime ticker (default: SPY) is trading below its
+        50-day simple moving average on daily candles.  Buying individual stocks
+        into a bear market is low-probability; this filter suppresses all BUY
+        signals when the macro environment is against us.
+
+        Set `regime_ticker: null` in config.json to disable this filter.
+        """
+        regime_ticker = self.config.get("regime_ticker", "SPY")
+        if not regime_ticker:
+            return False  # filter disabled
+        try:
+            import yfinance as yf
+            df = yf.download(regime_ticker, period="90d", interval="1d", progress=False)
+            if df.empty or len(df) < 50:
+                logger.warning("[regime] Not enough data to evaluate market regime – allowing BUYs.")
+                return False
+            if isinstance(df.columns, __import__('pandas').MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            sma50 = df['Close'].rolling(50).mean().iloc[-1]
+            current = float(df['Close'].iloc[-1])
+            bearish = current < float(sma50)
+            logger.info(
+                f"[regime] {regime_ticker} @ {current:.2f} vs 50-SMA {float(sma50):.2f} "
+                f"-> {'BEARISH ⚠️  – suppressing BUYs' if bearish else 'BULLISH ✅'}"
+            )
+            return bearish
+        except Exception as e:
+            logger.warning(f"[regime] Could not evaluate market regime: {e}. Allowing BUYs.")
+            return False
+
+    # ── Trailing Stop-Loss ───────────────────────────────────────────────────
+
+    def check_trailing_stops(self, open_positions: list):
+        """
+        Bump stop-losses upward for positions that have moved into meaningful profit.
+
+        Two tiers (thresholds configurable in config.json):
+          Tier 1  – price ≥ entry + 1.5×ATR  →  move SL to break-even (entry price)
+          Tier 2  – price ≥ entry + 3.0×ATR  →  move SL to entry + 1.5×ATR (lock profit)
+
+        Only bumps *upward* – never tightens a stop that’s already higher.
+        Cancels the old SL order and places a new one via the API.
+        """
+        open_trades = self.state.get("open_trades", {})
+        if not open_trades:
+            return
+
+        tier1_atr = self.config.get("trailing_sl_tier1_atr", 1.5)  # break-even trigger
+        tier2_atr = self.config.get("trailing_sl_tier2_atr", 3.0)  # lock-profit trigger
+
+        # Build a quick lookup of live positions for current prices
+        live_by_base = {}
+        for pos in open_positions:
+            base = pos.get('ticker', '').split('_')[0].upper()
+            live_by_base[base] = pos
+
+        changed = False
+        for ticker, trade in open_trades.items():
+            entry_price = trade.get('entry_price', 0.0)
+            current_sl  = trade.get('sl_price', 0.0)
+            sl_order_id = trade.get('sl_order_id')
+            t212_ticker = trade.get('t212_ticker', to_t212_ticker(ticker))
+            qty         = trade.get('qty', 0)
+
+            if not entry_price or not qty:
+                continue
+
+            # Get current price from live position snapshot
+            base = ticker.split('_')[0].upper()
+            pos = live_by_base.get(base)
+            if not pos:
+                continue
+            current_price = pos.get('currentPrice') or pos.get('averagePrice', 0.0)
+            if not current_price:
+                continue
+
+            # Get ATR for this ticker
+            atr = self.strategy.get_current_atr(ticker) if self.strategy else 0.0
+            if atr <= 0:
+                continue
+
+            profit = current_price - entry_price
+
+            # Determine target SL level
+            new_sl = None
+            if profit >= tier2_atr * atr:
+                # Tier 2: lock in profit at entry + 1.5×ATR
+                candidate = round(entry_price + tier1_atr * atr, 4)
+                if candidate > current_sl:
+                    new_sl = candidate
+                    tier = 2
+            elif profit >= tier1_atr * atr:
+                # Tier 1: move to break-even
+                candidate = round(entry_price, 4)
+                if candidate > current_sl:
+                    new_sl = candidate
+                    tier = 1
+
+            if new_sl is None:
+                continue
+
+            logger.info(
+                f"[trail] {ticker} | price={current_price:.4f} entry={entry_price:.4f} "
+                f"profit={profit:.4f} ({profit/entry_price*100:.1f}%) | "
+                f"Tier {tier}: bumping SL {current_sl:.4f} → {new_sl:.4f}"
+            )
+
+            # Cancel old SL, place new one
+            if sl_order_id:
+                self.client.cancel_order(sl_order_id)
+
+            sl_res = self.client.place_stop_order(t212_ticker, qty, new_sl)
+            if sl_res and sl_res.get('id'):
+                trade['sl_order_id'] = sl_res['id']
+                trade['sl_price']    = new_sl
+                logger.info(f"[trail] {ticker} SL updated to {new_sl:.4f}. New SL ID: {sl_res['id']}")
+                changed = True
+            else:
+                logger.error(f"[trail] {ticker} Failed to place updated SL: {sl_res}")
+
+        if changed:
+            self.save_state()
+
+    # ── Signal Scoring ──────────────────────────────────────────────────────────
+
+    def score_signal(self, signal_data: dict) -> float:
+        """
+        Composite quality score for a BUY signal (higher = better).
+
+        Components:
+          60%  RSI room below threshold  (50 - RSI)  — more oversold = stronger
+          40%  BB distance              (bb_pct_below) — further below band = stronger
+
+        Both are normalised so a combined score of 100 is a perfect setup
+        (RSI = 0, price at maximum distance below lower band).
+        The weighting can be tuned via config (rsi_score_weight, bb_score_weight).
+        """
+        rsi          = signal_data.get("rsi", 50.0)
+        bb_pct_below = signal_data.get("bb_pct_below", 0.0)
+
+        rsi_score = max(0.0, 50.0 - rsi)          # 0-50 range, higher = more oversold
+        bb_score  = bb_pct_below                  # % below lower band, already 0+
+
+        w_rsi = self.config.get("rsi_score_weight", 0.6)
+        w_bb  = self.config.get("bb_score_weight",  0.4)
+
+        return round((rsi_score * w_rsi) + (bb_score * w_bb * 100), 4)
+
     # ── Main Cycle ─────────────────────────────────────────────────────────────
 
     def run_cycle(self):
@@ -639,6 +794,9 @@ class TradingBot:
         # 3b. Resume any pending orders from a previous run (prevents double-buy on restart)
         self.resume_pending_orders()
 
+        # 3c. Trailing stop-loss check – bump SLs up on winning positions
+        self.check_trailing_stops(open_positions)
+
         # 4. Max-positions guard for buys
         positions_full = self.at_max_positions(open_positions, active_orders)
 
@@ -648,6 +806,13 @@ class TradingBot:
 
         # 6. Iterate tickers
         tickers = self.config.get("tickers", [])
+
+        # ── PHASE 1: Scan all tickers ─────────────────────────────────────────
+        # Collect every BUY signal and handle all SELLs before touching capital.
+        buy_candidates   = []   # (score, ticker, signal_data)
+        sell_tickers     = []
+        this_cycle_buys  = set()  # tickers still showing BUY this cycle
+
         for ticker in tickers:
             logger.info(f"Analyzing {ticker}...")
             try:
@@ -661,21 +826,95 @@ class TradingBot:
             logger.info(f"[{ticker}] Signal: {signal} | {signal_data.get('reason', '')}")
 
             if signal == "BUY":
-                if positions_full:
-                    logger.info(f"[{ticker}] BUY skipped – max positions reached.")
-                elif self.is_on_cooldown(ticker):
-                    pass  # already logged inside is_on_cooldown
+                this_cycle_buys.add(ticker)
+                if self.is_on_cooldown(ticker):
+                    pass
                 elif self.already_in_trade(ticker, open_positions, active_orders):
-                    pass  # already logged inside already_in_trade
+                    pass
                 else:
-                    self.handle_buy(ticker, signal_data, available_capital)
-                    # Refresh capital after a buy attempt so next ticker sees updated balance
-                    available_capital = self.get_available_capital()
+                    score = self.score_signal(signal_data)
+                    buy_candidates.append((score, ticker, signal_data))
+                    logger.info(f"[{ticker}] BUY queued | score={score:.2f}")
 
             elif signal == "SELL":
-                self.handle_sell(ticker)
+                sell_tickers.append(ticker)
 
             time.sleep(1)  # rate-limit between tickers
+
+        # ── Rebalance: cancel pending orders whose signal has gone stale ───────
+        # If a pending order's ticker is no longer showing BUY this cycle
+        # (recovered to WAIT/SELL), cancel it — the strategy no longer agrees.
+        pending = self.state.get("pending_orders", {})
+        cancelled_pending_tickers = []
+        for order_id, meta in list(pending.items()):
+            pending_ticker = meta.get("ticker", "")
+            if pending_ticker and pending_ticker not in this_cycle_buys:
+                logger.info(
+                    f"[rebalance] {pending_ticker} no longer shows BUY – "
+                    f"cancelling stale pending order {order_id}."
+                )
+                try:
+                    cancelled = self.client.cancel_order(int(order_id))
+                    if cancelled:
+                        del pending[order_id]
+                        cancelled_pending_tickers.append(pending_ticker)
+                        logger.info(f"[rebalance] Order {order_id} ({pending_ticker}) cancelled.")
+                    else:
+                        logger.warning(f"[rebalance] Could not cancel {order_id} – may have just filled.")
+                except Exception as e:
+                    logger.error(f"[rebalance] Error cancelling order {order_id}: {e}")
+        if cancelled_pending_tickers:
+            self.save_state()
+            logger.info(f"[rebalance] Freed {len(cancelled_pending_tickers)} slot(s) for better signals.")
+
+        # Process all SELLs first (frees capital before we buy)
+        for ticker in sell_tickers:
+            self.handle_sell(ticker)
+
+        # ── PHASE 2: Rank, allocate and buy ──────────────────────────────────
+        # Market regime filter: skip all buys if market is in a confirmed downtrend
+        market_bearish = self.is_market_bearish()
+
+        if buy_candidates and not positions_full and not market_bearish:
+            # Sort best score first
+            buy_candidates.sort(key=lambda x: x[0], reverse=True)
+
+            # Cap at remaining position slots (cancelled pendings free up slots)
+            max_pos    = self.config.get("max_open_positions", 5)
+            held_count = len({p.get('ticker') for p in open_positions})
+            # Re-fetch active orders since we just cancelled some
+            if cancelled_pending_tickers:
+                try:
+                    active_orders = self.client.get_active_orders()
+                except Exception:
+                    pass
+            pending_count = len([o for o in active_orders
+                                  if o.get('type', '').upper() in ('LIMIT', 'STOP')])
+            slots_free = max(0, max_pos - held_count - pending_count)
+            buy_candidates = buy_candidates[:slots_free]
+
+            if buy_candidates:
+                # Refresh capital (SELLs + cancellations may have freed cash)
+                available_capital = self.get_available_capital()
+
+                # Even split — each candidate gets an equal share
+                per_trade_capital = available_capital / len(buy_candidates)
+                logger.info(
+                    f"Phase 2 | {len(buy_candidates)} BUY candidate(s) | "
+                    f"Total capital £{available_capital:.2f} | "
+                    f"Per-trade allocation £{per_trade_capital:.2f}"
+                )
+
+                for score, ticker, signal_data in buy_candidates:
+                    logger.info(
+                        f"[{ticker}] Executing BUY | score={score:.2f} | "
+                        f"allocation=£{per_trade_capital:.2f}"
+                    )
+                    self.handle_buy(ticker, signal_data, per_trade_capital)
+        elif market_bearish:
+            logger.info("[regime] Market is bearish – all BUY signals suppressed this cycle.")
+        elif positions_full:
+            logger.info("Max positions reached – no new buys this cycle.")
 
     # ── Entry Point ────────────────────────────────────────────────────────────
 

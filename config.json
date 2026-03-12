@@ -4,14 +4,25 @@
     "bot_status": "LOCKED",
     "tickers": [],
     "preset_mode": "Conservative",
+
     "bb_length": 20,
     "bb_std": 2.0,
     "rsi_length": 14,
     "rsi_threshold": 30,
+
     "capital_utilization_pct": 0.95,
-    "kill_switch_drop_pct": 0.05,
+    "min_investment_amount": 1.0,
     "stop_loss_pct": 0.02,
     "max_open_positions": 5,
     "order_fill_timeout_secs": 60,
-    "per_ticker_cooldown_mins": 30
+    "per_ticker_cooldown_mins": 30,
+    "kill_switch_drop_pct": 0.05,
+
+    "rsi_score_weight": 0.6,
+    "bb_score_weight": 0.4,
+
+    "regime_ticker": "SPY",
+
+    "trailing_sl_tier1_atr": 1.5,
+    "trailing_sl_tier2_atr": 3.0
 }
