@@ -149,6 +149,22 @@ class Trading212Client:
         }
         return self._post("/equity/orders/stop", payload)
 
+    def place_limit_sell(self, ticker: str, quantity: float,
+                         limit_price: float) -> dict:
+        """
+        Places a limit SELL order at the specified price (take-profit leg).
+        Used after a confirmed BUY fill to lock in profit at the target.
+        quantity should be the number of shares to sell (sign is forced negative).
+        """
+        payload = {
+            "ticker": ticker,
+            "quantity": -abs(quantity),            # negative = SELL
+            "limitPrice": round(limit_price, 4),
+            "timeValidity": "GTC"
+        }
+        return self._post("/equity/orders/limit", payload)
+
+
     def place_market_sell(self, ticker: str, quantity: float) -> dict:
         """
         Closes an open position immediately at market.

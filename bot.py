@@ -8,7 +8,7 @@ from pathlib import Path
 from strategy import MeanReversionStrategy
 from trading212_client import Trading212Client
 
-# ── Logging Setup ──────────────────────────────────────────────────────────────
+#  Logging Setup 
 # Logs rotate daily in the logs/ subfolder, 30 days retained.
 # File captures DEBUG (including full payloads); console stays at INFO.
 LOG_DIR = Path("logs")
@@ -40,7 +40,7 @@ for _noisy_lib in ("yfinance", "urllib3", "peewee", "hpack", "httpx"):
 
 logger = logging.getLogger("bot")
 
-# ── Ticker Helpers ─────────────────────────────────────────────────────────────
+#  Ticker Helpers 
 # yfinance uses bare tickers (COIN); Trading212 v0 needs the full instrument code.
 # Tickers in config that already contain "_" are assumed to be pre-qualified.
 _NON_EQUITY = {"BTC-USD", "ETH-USD"}  # crypto pairs handled differently by T212
@@ -51,7 +51,7 @@ def to_t212_ticker(ticker: str) -> str:
         return ticker
     return f"{ticker}_US_EQ"
 
-# ── Constants ──────────────────────────────────────────────────────────────────
+#  Constants 
 CONFIG_FILE = "config.json"
 STATE_FILE  = "bot_state.json"
 
@@ -66,7 +66,7 @@ class TradingBot:
         self.client   = None
         self.strategy = None
 
-    # ── Config / State I/O ─────────────────────────────────────────────────────
+    #  Config / State I/O 
 
     def load_config(self):
         try:
@@ -86,9 +86,9 @@ class TradingBot:
     def load_state(self):
         """
         State persists across restarts:
-          peak_equity      – highest total equity seen (for kill switch)
-          open_trades      – { ticker: { qty, sl_order_id, entry_price } }
-          cooldowns        – { ticker: ISO-timestamp of last close }
+          peak_equity       highest total equity seen (for kill switch)
+          open_trades       { ticker: { qty, sl_order_id, entry_price } }
+          cooldowns         { ticker: ISO-timestamp of last close }
         """
         if Path(STATE_FILE).exists():
             try:
@@ -115,7 +115,7 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error saving state: {e}")
 
-    # ── Initialisation ─────────────────────────────────────────────────────────
+    #  Initialisation 
 
     def init_clients(self) -> bool:
         """Initialise / re-initialise API clients from the current config."""
@@ -135,7 +135,7 @@ class TradingBot:
         )
         return True
 
-    # ── Kill Switch ────────────────────────────────────────────────────────────
+    #  Kill Switch 
 
     def check_kill_switch(self, current_equity: float) -> bool:
         """
@@ -173,7 +173,7 @@ class TradingBot:
             self.save_state()
             logger.info("Lockdown complete. All positions liquidated. Bot LOCKED.")
 
-    # ── Position Reconciliation ────────────────────────────────────────────────
+    #  Position Reconciliation 
 
     def sync_open_trades(self, open_positions: list):
         """
@@ -192,7 +192,7 @@ class TradingBot:
         open_trades = self.state.setdefault("open_trades", {})
         live_by_t212 = {p['ticker']: p for p in open_positions if 'ticker' in p}
 
-        # ── Import untracked live positions ────────────────────────────────────
+        #  Import untracked live positions 
         # Build a reverse map: t212_ticker -> short ticker, for positions we DO track
         tracked_t212 = {
             v.get('t212_ticker', to_t212_ticker(k)): k
@@ -209,7 +209,7 @@ class TradingBot:
                 open_trades[short] = {
                     "qty":          qty,
                     "entry_price":  avg_price,
-                    "sl_order_id":  None,   # unknown – was opened outside the bot
+                    "sl_order_id":  None,   # unknown  was opened outside the bot
                     "t212_ticker":  t212_ticker,
                     "imported":     True
                 }
@@ -221,7 +221,7 @@ class TradingBot:
                 + ", ".join(imported)
             )
 
-        # ── Remove stale local records ─────────────────────────────────────────
+        #  Remove stale local records 
         stale = []
         for short_ticker, trade in list(open_trades.items()):
             t212 = trade.get('t212_ticker', to_t212_ticker(short_ticker))
@@ -249,9 +249,9 @@ class TradingBot:
         Called at the start of every cycle.
         Checks every pending buy order (tracked by ID) against the live API:
 
-          FILLED    → promote to open_trades, place stop-loss, remove from pending
-          CANCELLED/REJECTED/EXPIRED → clean up, remove from pending
-          still WORKING/PLACED       → leave it; already_in_trade() will skip a new BUY
+          FILLED     promote to open_trades, place stop-loss, remove from pending
+          CANCELLED/REJECTED/EXPIRED  clean up, remove from pending
+          still WORKING/PLACED        leave it; already_in_trade() will skip a new BUY
 
         This prevents the bot from placing a second buy on restart when a limit
         order from the previous run is still live on the exchange.
@@ -272,7 +272,7 @@ class TradingBot:
                 logger.info(f"[resume] Pending order {order_id} ({ticker}) status={status}")
 
                 if status == "FILLED":
-                    # Order filled during downtime — promote and place SL
+                    # Order filled during downtime  promote and place SL
                     logger.info(f"[resume] {ticker} filled during restart gap. Placing SL @ ${sl_price:.4f}")
                     sl_res = self.client.place_stop_order(t212, qty, sl_price)
                     if sl_res and sl_res.get('id'):
@@ -292,7 +292,7 @@ class TradingBot:
                     logger.info(f"[resume] Removing stale pending order {order_id} ({ticker}, status={status}).")
                     del pending[order_id]
 
-                # WORKING / PLACED / PARTIALLY_FILLED → leave in pending; skip re-buy
+                # WORKING / PLACED / PARTIALLY_FILLED  leave in pending; skip re-buy
 
             except Exception as e:
                 logger.error(f"[resume] Error checking pending order {order_id}: {e}")
@@ -317,7 +317,7 @@ class TradingBot:
 
         if not entry_price or not qty:
             logger.warning(
-                f"[{ticker}] Cannot place SL – missing entry price or qty in state."
+                f"[{ticker}] Cannot place SL  missing entry price or qty in state."
             )
             return
 
@@ -337,10 +337,10 @@ class TradingBot:
         # Pick the lower (wider) of the two to avoid premature stops
         if atr_stop > 0:
             stop_price = min(pct_stop, atr_stop)
-            method = f"ATR({atr_stop:.4f}) vs Pct({pct_stop:.4f}) → chose {stop_price:.4f}"
+            method = f"ATR({atr_stop:.4f}) vs Pct({pct_stop:.4f})  chose {stop_price:.4f}"
         else:
             stop_price = pct_stop
-            method = f"Pct-based only ({pct_stop:.4f}) – ATR unavailable"
+            method = f"Pct-based only ({pct_stop:.4f})  ATR unavailable"
 
         logger.info(
             f"[{ticker}] Placing catch-up SL | {method} | Qty={qty} t212={t212_ticker}"
@@ -364,7 +364,7 @@ class TradingBot:
                 f"MANUAL SL at ${stop_price:.4f} STRONGLY recommended!"
             )
 
-    # ── Pre-Trade Checks ───────────────────────────────────────────────────────
+    #  Pre-Trade Checks 
 
     def get_available_capital(self) -> float:
         """Returns free_cash * capital_utilization_pct."""
@@ -412,13 +412,13 @@ class TradingBot:
         our_base = base(ticker)
 
         if any(base(p.get('ticker', '')) == our_base for p in open_positions):
-            logger.info(f"[{ticker}] Already have an open position – skipping BUY.")
+            logger.info(f"[{ticker}] Already have an open position  skipping BUY.")
             return True
         if any(base(o.get('ticker', '')) == our_base for o in active_orders):
-            logger.info(f"[{ticker}] Already have a pending order – skipping BUY.")
+            logger.info(f"[{ticker}] Already have a pending order  skipping BUY.")
             return True
         if ticker in self.state.get("open_trades", {}):
-            logger.info(f"[{ticker}] Locally tracked open trade exists – skipping BUY.")
+            logger.info(f"[{ticker}] Locally tracked open trade exists  skipping BUY.")
             return True
         return False
 
@@ -434,62 +434,57 @@ class TradingBot:
         if total >= max_pos:
             logger.info(
                 f"Max open positions ({max_pos}) reached "
-                f"({total} held/pending) – no new buys this cycle."
+                f"({total} held/pending)  no new buys this cycle."
             )
             return True
         return False
 
-    # ── Order Execution ────────────────────────────────────────────────────────
-
-    def wait_for_fill(self, order_id, timeout_secs: int = 60) -> bool:
+    #  Order Execution     def handle_buy(self, ticker: str, signal_data: dict, available_capital: float):
         """
-        Polls /equity/orders/{order_id} until either:
-          - status == 'FILLED' → returns True
-          - status == 'CANCELLED' / 'REJECTED' → returns False
-          - timeout expires → returns False (order remains open as DAY order)
+        Places a limit BUY order for the given ticker using a fixed-risk sizing model.
+        Stop-loss: ATR-based (entry - sl_atr_multiplier * ATR).
+        Position size: fixed risk amount / SL distance.
+        After fill: both a stop-loss AND a take-profit limit order are placed.
         """
-        deadline = time.time() + timeout_secs
-        while time.time() < deadline:
-            order = self.client.get_order_by_id(order_id)
-            status = order.get("status", "").upper()
-            if status == "FILLED":
-                logger.info(f"Order {order_id} FILLED.")
-                return True
-            if status in ("CANCELLED", "REJECTED"):
-                logger.warning(f"Order {order_id} ended with status {status}.")
-                return False
-            logger.debug(f"Order {order_id} status={status} – waiting {FILL_POLL_INTERVAL}s…")
-            time.sleep(FILL_POLL_INTERVAL)
-
-        logger.warning(
-            f"Order {order_id} did not fill within {timeout_secs}s. "
-            f"It remains as a DAY order; stop-loss not yet placed."
-        )
-        return False
-
-    def handle_buy(self, ticker: str, signal_data: dict, available_capital: float):
-        """Full BUY flow: size → place limit → poll fill → place SL."""
-        price     = signal_data.get("price", 0.0)
-        target_tp = signal_data.get("target_tp", 0.0)
+        price     = float(signal_data.get("price", 0.0))
+        target_tp = float(signal_data.get("target_tp", 0.0))
+        atr       = float(signal_data.get("atr", 0.0))
 
         min_investment = self.config.get("min_investment_amount", 1.0)
         if price <= 0 or available_capital < min_investment:
             logger.info(
-                f"[{ticker}] Allocation £{available_capital:.2f} below minimum £{min_investment:.2f} – skipping."
+                f"[{ticker}] Allocation {available_capital:.2f} below minimum {min_investment:.2f} skipping."
             )
             return
 
-        # Trading 212 supports fractional shares – round to 4dp for precision
-        quantity        = round(available_capital / price, 4)
-        limit_price     = price
-        stop_pct        = self.config.get("stop_loss_pct", 0.02)
-        stop_loss_price = round(limit_price * (1.0 - stop_pct), 4)
-        t212_ticker     = to_t212_ticker(ticker)
+        # ATR-based stop-loss price
+        sl_atr_mult = float(self.config.get("sl_atr_multiplier", 1.5))
+        if atr > 0:
+            stop_loss_price = round(price - (atr * sl_atr_mult), 4)
+        else:
+            stop_pct        = self.config.get("stop_loss_pct", 0.02)
+            stop_loss_price = round(price * (1.0 - stop_pct), 4)
+
+        sl_distance = price - stop_loss_price
+        if sl_distance <= 0:
+            logger.warning(f"[{ticker}] Invalid SL distance ({sl_distance:.4f}) skipping.")
+            return
+
+        # Fixed-risk position sizing
+        total_equity  = float(getattr(self, '_cycle_equity', available_capital))
+        risk_pct      = float(self.config.get("risk_per_trade_pct", 0.01))
+        risk_amount   = total_equity * risk_pct
+        risk_qty      = round(risk_amount / sl_distance, 4)
+        max_qty       = round(available_capital / price, 4)
+        quantity      = min(risk_qty, max_qty)
+        limit_price   = price
+        t212_ticker   = to_t212_ticker(ticker)
 
         logger.info(
             f"[{ticker}] Placing Limit BUY | t212={t212_ticker} | "
-            f"Qty={quantity} (fractional) @ £{limit_price:.4f} | "
-            f"SL=£{stop_loss_price:.4f} | TP=£{target_tp:.4f}"
+            f"Qty={quantity} (risk-sized) @ {limit_price:.4f} | "
+            f"SL={stop_loss_price:.4f} ({sl_atr_mult}*ATR={atr:.4f}) | "
+            f"TP={target_tp:.4f}"
         )
 
         res = self.client.place_limit_order(
@@ -505,9 +500,7 @@ class TradingBot:
         order_id = res['id']
         logger.info(f"[{ticker}] Limit BUY submitted. Order ID: {order_id}")
 
-        # ── Track the pending order immediately so restarts won't double-buy ──
-        stop_pct_check = self.config.get("stop_loss_pct", 0.02)
-        pending_sl     = round(limit_price * (1.0 - stop_pct_check), 4)
+        # Track the pending order
         self.state.setdefault("pending_orders", {})[str(order_id)] = {
             "ticker":       ticker,
             "t212_ticker":  t212_ticker,
@@ -517,7 +510,7 @@ class TradingBot:
         }
         self.save_state()
 
-        # ── Poll for fill before attaching stop-loss ──────────────────────────
+        # Poll for fill
         fill_timeout = self.config.get("order_fill_timeout_secs", 60)
         filled = self.wait_for_fill(order_id, timeout_secs=fill_timeout)
 
@@ -527,25 +520,37 @@ class TradingBot:
                 quantity=quantity,
                 stop_price=stop_loss_price
             )
+            tp_res = None
+            if target_tp and target_tp > limit_price:
+                tp_res = self.client.place_limit_sell(
+                    ticker=t212_ticker,
+                    quantity=quantity,
+                    limit_price=round(float(target_tp), 4)
+                )
+
             if sl_res and sl_res.get('id'):
                 sl_id = sl_res['id']
+                tp_id = tp_res.get('id') if tp_res else None
                 logger.info(
-                    f"[{ticker}] Stop-Loss placed. SL ID: {sl_id} @ ${stop_loss_price:.2f}"
+                    f"[{ticker}] SL placed @ {stop_loss_price:.4f} (ID: {sl_id})"
+                    + (f" | TP placed @ {target_tp:.4f} (ID: {tp_id})" if tp_id else "")
                 )
-                # Promote from pending → open_trades
+                # Promote from pending to open_trades
                 self.state.setdefault("open_trades", {})[ticker] = {
-                    "qty":         quantity,
-                    "entry_price": limit_price,
+                    "qty":          quantity,
+                    "entry_price":  limit_price,
                     "sl_order_id": sl_id,
-                    "sl_price":    stop_loss_price,
-                    "t212_ticker": t212_ticker
+                    "sl_price":     stop_loss_price,
+                    "tp_order_id": tp_id,
+                    "tp_price":     float(target_tp) if target_tp else None,
+                    "t212_ticker":  t212_ticker
                 }
                 self.state.get("pending_orders", {}).pop(str(order_id), None)
                 self.save_state()
             else:
                 logger.warning(
                     f"[{ticker}] FILLED but stop-loss order FAILED. "
-                    f"Manual SL at ${stop_loss_price:.2f} STRONGLY recommended!"
+                    f"Manual SL recommended!"
                 )
         else:
             logger.warning(
@@ -555,53 +560,74 @@ class TradingBot:
 
     def handle_sell(self, ticker: str):
         """
-        If we hold a tracked position in this ticker, close it at market and
-        cancel any associated stop-loss order, then set a cooldown.
+        Close position at market, cancel associated SL and TP orders.
         """
         open_trades = self.state.get("open_trades", {})
         if ticker not in open_trades:
-            return  # We don't actually hold this ticker; strategy is just observing
+            return
 
-        trade = open_trades[ticker]
+        trade       = open_trades[ticker]
         t212_ticker = trade.get("t212_ticker", to_t212_ticker(ticker))
         qty         = trade.get("qty", 0)
         sl_id       = trade.get("sl_order_id")
+        tp_id       = trade.get("tp_order_id")
 
         logger.info(
-            f"[{ticker}] SELL signal – closing position "
-            f"(Qty={qty} @ market, cancelling SL {sl_id})"
+            f"[{ticker}] SELL signal  closing position "
+            f"(Qty={qty} @ market, cancelling SL={sl_id}, TP={tp_id})"
         )
 
-        # Cancel the standing stop-loss first to avoid double-sell
-        if sl_id:
-            if self.client.cancel_order(sl_id):
-                logger.info(f"[{ticker}] SL order {sl_id} cancelled.")
-            else:
-                logger.warning(
-                    f"[{ticker}] Could not cancel SL order {sl_id} – "
-                    f"may already have triggered."
-                )
+        # Cancel SL and TP orders first to avoid double-sell
+        for order_id, label in [(sl_id, "SL"), (tp_id, "TP")]:
+            if order_id:
+                if self.client.cancel_order(order_id):
+                    logger.info(f"[{ticker}] {label} order {order_id} cancelled.")
+                else:
+                    logger.warning(f"[{ticker}] Could not cancel {label} order {order_id}  may have triggered.")
 
         # Market sell
         res = self.client.place_market_sell(t212_ticker, qty)
         if res and res.get('id'):
-            logger.info(
-                f"[{ticker}] Market SELL submitted. Order ID: {res['id']}"
-            )
+            logger.info(f"[{ticker}] Market SELL submitted. Order ID: {res['id']}")
         else:
-            logger.error(
-                f"[{ticker}] Market SELL failed: {res}. "
-                f"MANUAL CLOSE REQUIRED."
-            )
+            logger.error(f"[{ticker}] Market SELL failed: {res}. MANUAL CLOSE REQUIRED.")
 
-        # Clean up state and set cooldown
         del open_trades[ticker]
-        self.state.setdefault("cooldowns", {})[ticker] = (
-            datetime.now(timezone.utc).isoformat()
-        )
+        self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
         self.save_state()
 
-    # ── Market Regime Filter ────────────────────────────────────────────────────
+    #  Market Hours Guard 
+
+    def is_market_open(self) -> bool:
+        """
+        Returns True if the US equity market is currently open.
+        Regular session: 9:30am  4:00pm Eastern Time, Monday  Friday.
+        """
+        if not self.config.get("market_hours_check", True):
+            return True
+        try:
+            from datetime import timedelta
+            # Approximate ET as UTC-4 (EDT)
+            now_et = (datetime.now(timezone.utc) + timedelta(hours=-4)).replace(
+                tzinfo=timezone.utc
+            )
+
+            if now_et.weekday() >= 5:
+                logger.info(f"[hours] Market closed (weekend).")
+                return False
+
+            open_t  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+            close_t = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+            is_open = open_t <= now_et <= close_t
+
+            if not is_open:
+                logger.info(f"[hours] Market closed.")
+            return is_open
+        except Exception as e:
+            logger.warning(f"[hours] Could not determine market status: {e}. Allowing analysis.")
+            return True
+
+    #  Market Regime Filter 
 
     def is_market_bearish(self) -> bool:
         """
@@ -621,7 +647,7 @@ class TradingBot:
             import yfinance as yf
             df = yf.download(regime_ticker, period="90d", interval="1d", progress=False)
             if df.empty or len(df) < 50:
-                logger.warning("[regime] Not enough data to evaluate market regime – allowing BUYs.")
+                logger.warning("[regime] Not enough data to evaluate market regime  allowing BUYs.")
                 return False
             if isinstance(df.columns, __import__('pandas').MultiIndex):
                 df.columns = df.columns.droplevel(1)
@@ -630,24 +656,24 @@ class TradingBot:
             bearish = current < float(sma50)
             logger.info(
                 f"[regime] {regime_ticker} @ {current:.2f} vs 50-SMA {float(sma50):.2f} "
-                f"-> {'BEARISH ⚠️  – suppressing BUYs' if bearish else 'BULLISH ✅'}"
+                f"-> {'BEARISH    suppressing BUYs' if bearish else 'BULLISH '}"
             )
             return bearish
         except Exception as e:
             logger.warning(f"[regime] Could not evaluate market regime: {e}. Allowing BUYs.")
             return False
 
-    # ── Trailing Stop-Loss ───────────────────────────────────────────────────
+    #  Trailing Stop-Loss 
 
     def check_trailing_stops(self, open_positions: list):
         """
         Bump stop-losses upward for positions that have moved into meaningful profit.
 
         Two tiers (thresholds configurable in config.json):
-          Tier 1  – price ≥ entry + 1.5×ATR  →  move SL to break-even (entry price)
-          Tier 2  – price ≥ entry + 3.0×ATR  →  move SL to entry + 1.5×ATR (lock profit)
+          Tier 1   price  entry + 1.5ATR    move SL to break-even (entry price)
+          Tier 2   price  entry + 3.0ATR    move SL to entry + 1.5ATR (lock profit)
 
-        Only bumps *upward* – never tightens a stop that’s already higher.
+        Only bumps *upward*  never tightens a stop thats already higher.
         Cancels the old SL order and places a new one via the API.
         """
         open_trades = self.state.get("open_trades", {})
@@ -693,7 +719,7 @@ class TradingBot:
             # Determine target SL level
             new_sl = None
             if profit >= tier2_atr * atr:
-                # Tier 2: lock in profit at entry + 1.5×ATR
+                # Tier 2: lock in profit at entry + 1.5ATR
                 candidate = round(entry_price + tier1_atr * atr, 4)
                 if candidate > current_sl:
                     new_sl = candidate
@@ -711,7 +737,7 @@ class TradingBot:
             logger.info(
                 f"[trail] {ticker} | price={current_price:.4f} entry={entry_price:.4f} "
                 f"profit={profit:.4f} ({profit/entry_price*100:.1f}%) | "
-                f"Tier {tier}: bumping SL {current_sl:.4f} → {new_sl:.4f}"
+                f"Tier {tier}: bumping SL {current_sl:.4f}  {new_sl:.4f}"
             )
 
             # Cancel old SL, place new one
@@ -730,15 +756,15 @@ class TradingBot:
         if changed:
             self.save_state()
 
-    # ── Signal Scoring ──────────────────────────────────────────────────────────
+    #  Signal Scoring 
 
     def score_signal(self, signal_data: dict) -> float:
         """
         Composite quality score for a BUY signal (higher = better).
 
         Components:
-          60%  RSI room below threshold  (50 - RSI)  — more oversold = stronger
-          40%  BB distance              (bb_pct_below) — further below band = stronger
+          60%  RSI room below threshold  (50 - RSI)   more oversold = stronger
+          40%  BB distance              (bb_pct_below)  further below band = stronger
 
         Both are normalised so a combined score of 100 is a perfect setup
         (RSI = 0, price at maximum distance below lower band).
@@ -755,7 +781,7 @@ class TradingBot:
 
         return round((rsi_score * w_rsi) + (bb_score * w_bb * 100), 4)
 
-    # ── Main Cycle ─────────────────────────────────────────────────────────────
+    #  Main Cycle 
 
     def run_cycle(self):
         """A single end-to-end iteration of the trading loop."""
@@ -768,8 +794,9 @@ class TradingBot:
 
         # 1. Kill-switch check
         try:
-            cash_state     = self.client.get_account_cash()
-            current_equity = cash_state.get('total', 0.0)
+            cash_state         = self.client.get_account_cash()
+            current_equity     = cash_state.get('total', 0.0)
+            self._cycle_equity = current_equity   # cache for fixed-risk sizing in handle_buy
             if current_equity > 0 and self.check_kill_switch(current_equity):
                 return
         except Exception as e:
@@ -788,26 +815,29 @@ class TradingBot:
             f"Pending orders: {len(active_orders)}"
         )
 
-        # 3. Reconcile live positions with local state (imports pre-existing trades)
+        # 3. Reconcile live positions
         self.sync_open_trades(open_positions)
-
-        # 3b. Resume any pending orders from a previous run (prevents double-buy on restart)
+        # 3b. Resume pending orders from previous run
         self.resume_pending_orders()
-
-        # 3c. Trailing stop-loss check – bump SLs up on winning positions
+        # 3c. Trailing stop-loss bump
         self.check_trailing_stops(open_positions)
 
-        # 4. Max-positions guard for buys
+        # 4. Market hours check  skip BUY analysis outside session
+        if not self.is_market_open():
+            logger.info("Market is closed  skipping BUY/SELL analysis this cycle.")
+            return
+
+        # 5. Max-positions guard
         positions_full = self.at_max_positions(open_positions, active_orders)
 
         # 5. Fetch available capital ONCE per cycle (avoids per-ticker 429 rate-limits)
         available_capital = self.get_available_capital()
-        logger.info(f"Available capital this cycle: £{available_capital:.2f}")
+        logger.info(f"Available capital this cycle: {available_capital:.2f}")
 
         # 6. Iterate tickers
         tickers = self.config.get("tickers", [])
 
-        # ── PHASE 1: Scan all tickers ─────────────────────────────────────────
+        #  PHASE 1: Scan all tickers 
         # Collect every BUY signal and handle all SELLs before touching capital.
         buy_candidates   = []   # (score, ticker, signal_data)
         sell_tickers     = []
@@ -841,16 +871,16 @@ class TradingBot:
 
             time.sleep(1)  # rate-limit between tickers
 
-        # ── Rebalance: cancel pending orders whose signal has gone stale ───────
+        #  Rebalance: cancel pending orders whose signal has gone stale 
         # If a pending order's ticker is no longer showing BUY this cycle
-        # (recovered to WAIT/SELL), cancel it — the strategy no longer agrees.
+        # (recovered to WAIT/SELL), cancel it  the strategy no longer agrees.
         pending = self.state.get("pending_orders", {})
         cancelled_pending_tickers = []
         for order_id, meta in list(pending.items()):
             pending_ticker = meta.get("ticker", "")
             if pending_ticker and pending_ticker not in this_cycle_buys:
                 logger.info(
-                    f"[rebalance] {pending_ticker} no longer shows BUY – "
+                    f"[rebalance] {pending_ticker} no longer shows BUY  "
                     f"cancelling stale pending order {order_id}."
                 )
                 try:
@@ -860,7 +890,7 @@ class TradingBot:
                         cancelled_pending_tickers.append(pending_ticker)
                         logger.info(f"[rebalance] Order {order_id} ({pending_ticker}) cancelled.")
                     else:
-                        logger.warning(f"[rebalance] Could not cancel {order_id} – may have just filled.")
+                        logger.warning(f"[rebalance] Could not cancel {order_id}  may have just filled.")
                 except Exception as e:
                     logger.error(f"[rebalance] Error cancelling order {order_id}: {e}")
         if cancelled_pending_tickers:
@@ -871,7 +901,7 @@ class TradingBot:
         for ticker in sell_tickers:
             self.handle_sell(ticker)
 
-        # ── PHASE 2: Rank, allocate and buy ──────────────────────────────────
+        #  PHASE 2: Rank, allocate and buy 
         # Market regime filter: skip all buys if market is in a confirmed downtrend
         market_bearish = self.is_market_bearish()
 
@@ -897,26 +927,26 @@ class TradingBot:
                 # Refresh capital (SELLs + cancellations may have freed cash)
                 available_capital = self.get_available_capital()
 
-                # Even split — each candidate gets an equal share
+                # Even split  each candidate gets an equal share
                 per_trade_capital = available_capital / len(buy_candidates)
                 logger.info(
                     f"Phase 2 | {len(buy_candidates)} BUY candidate(s) | "
-                    f"Total capital £{available_capital:.2f} | "
-                    f"Per-trade allocation £{per_trade_capital:.2f}"
+                    f"Total capital {available_capital:.2f} | "
+                    f"Per-trade allocation {per_trade_capital:.2f}"
                 )
 
                 for score, ticker, signal_data in buy_candidates:
                     logger.info(
                         f"[{ticker}] Executing BUY | score={score:.2f} | "
-                        f"allocation=£{per_trade_capital:.2f}"
+                        f"allocation={per_trade_capital:.2f}"
                     )
                     self.handle_buy(ticker, signal_data, per_trade_capital)
         elif market_bearish:
-            logger.info("[regime] Market is bearish – all BUY signals suppressed this cycle.")
+            logger.info("[regime] Market is bearish  all BUY signals suppressed this cycle.")
         elif positions_full:
-            logger.info("Max positions reached – no new buys this cycle.")
+            logger.info("Max positions reached  no new buys this cycle.")
 
-    # ── Entry Point ────────────────────────────────────────────────────────────
+    #  Entry Point 
 
     def start(self):
         logger.info("Trading Bot Daemon Started.")
@@ -927,13 +957,15 @@ class TradingBot:
             except Exception as e:
                 logger.error(f"Unexpected error in run cycle: {e}", exc_info=True)
 
-            # Flush log handlers so the dashboard/files stay current
             for handler in logging.root.handlers:
                 handler.flush()
 
-            time.sleep(60)  # 1-minute loop
+            interval = self.config.get("cycle_interval_secs", 900)  # default 15 min = matches 15m candles
+            logger.info(f"Next cycle in {interval}s ({interval//60}m {interval%60}s).")
+            time.sleep(interval)
 
 
 if __name__ == "__main__":
     bot = TradingBot()
     bot.start()
+

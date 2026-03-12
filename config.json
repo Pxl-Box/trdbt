@@ -24,5 +24,10 @@
     "regime_ticker": "SPY",
 
     "trailing_sl_tier1_atr": 1.5,
-    "trailing_sl_tier2_atr": 3.0
+    "trailing_sl_tier2_atr": 3.0,
+
+    "sl_atr_multiplier": 1.5,
+    "risk_per_trade_pct": 0.01,
+    "market_hours_check": true,
+    "cycle_interval_secs": 900
 }

@@ -20,19 +20,15 @@ class MeanReversionStrategy:
         """
         Fetches historical OHLCV data to compute indicators natively.
         Uses 15-minute candles by default for intra-day mean reversion.
+        The cycle interval should match (see cycle_interval_secs in config).
         """
         try:
-            # yfinance tickers might require slight formatting vs Trading 212.
-            # e.g., Trading 212 uses SPY_US_EQ, yfinance uses SPY.
-            yf_ticker = ticker.split("_")[0] 
+            yf_ticker = ticker.split("_")[0]
             df = yf.download(yf_ticker, period=period, interval=interval, progress=False)
             if df.empty:
                 return df
-                
-            # Flatten potential MultiIndex if yfinance returns it
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
-                
             return df
         except Exception as e:
             logger.error(f"Failed to fetch data for {ticker}: {e}")
@@ -68,22 +64,23 @@ class MeanReversionStrategy:
         bbl_col = next((c for c in bbands.columns if c.startswith('BBL_')), None)
         bbm_col = next((c for c in bbands.columns if c.startswith('BBM_')), None)
         
-        current_price = latest['Close']
-        lower_band = latest[bbl_col] if bbl_col else current_price
-        basis = latest[bbm_col] if bbm_col else current_price # Middle band
-        rsi = latest['RSI']
-        atr = latest['ATR']
-        
+        current_price  = float(latest['Close'])
+        lower_band     = float(latest[bbl_col])  if bbl_col else current_price
+        basis          = float(latest[bbm_col])  if bbm_col else current_price
+        rsi            = float(latest['RSI'])
+        atr            = float(latest['ATR'])
+
+        # Previous candle values (for crossover logic)
+        prev_close      = float(previous['Close'])
+        lower_band_prev = float(previous[bbl_col]) if bbl_col else prev_close
+
         # Black Swan Volatility Filter
-        # If the latest candle's range is extremely large (> 3x ATR), assume panic
         candle_range = latest['High'] - latest['Low']
         if candle_range > 3 * atr:
             logger.warning(f"BLACK SWAN AVOIDED: {ticker} candle range {candle_range:.2f} > 3x ATR ({atr:.2f})")
             return {"signal": "BLOCK", "reason": "High Volatility Black Swan"}
 
         # Volume Confirmation Filter
-        # Skip signals where volume is below a threshold of the rolling average.
-        # Low volume = low conviction; the move may not be real.
         if 'Volume' in df.columns:
             avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
             min_vol_pct = getattr(self, 'volume_min_pct', 0.8)
@@ -94,26 +91,35 @@ class MeanReversionStrategy:
                 )
                 return {"signal": "WAIT", "price": current_price, "reason": "Low volume – no conviction"}
 
+        # ── Entry Logic ───────────────────────────────────────────────────────
+        # Require a FRESH crossover below the lower band (not just 'already below').
+        # Previous candle must have closed AT or ABOVE the lower band, and the
+        # current candle must close BELOW it.  This prevents chasing stocks that
+        # have been bleeding below the band for several candles already.
+        fresh_break = (prev_close >= lower_band_prev) and (current_price < lower_band)
 
-        # Entry Logic: Price < Lower Band AND RSI < threshold
-        if current_price < lower_band and rsi < self.rsi_threshold:
+        if fresh_break and rsi < self.rsi_threshold:
             bb_pct_below = ((lower_band - current_price) / lower_band) * 100
             return {
-                "signal":      "BUY",
-                "price":       current_price,
-                "target_tp":   basis, # Take profit at the mean
-                "rsi":         float(rsi),
-                "bb_pct_below": float(bb_pct_below),  # % below lower band — higher = stronger
-                "atr":         float(atr),
-                "reason": f"Price ({current_price:.2f}) < BB Lower ({lower_band:.2f}) & RSI ({rsi:.2f}) < {self.rsi_threshold}"
+                "signal":          "BUY",
+                "price":           current_price,
+                "target_tp":       basis,
+                "rsi":             rsi,
+                "bb_pct_below":    float(bb_pct_below),
+                "atr":             atr,
+                "fresh_break":     True,
+                "reason": (
+                    f"Fresh BB lower cross: prev={prev_close:.4f}>={lower_band_prev:.4f}, "
+                    f"now={current_price:.4f}<{lower_band:.4f} | RSI={rsi:.2f}"
+                )
             }
-            
-        # Exit Logic (If currently holding) is handled when holding. The strategy only tells us if it crossed the basis.
+
+        # Exit Logic — price has returned to or above the midline
         if current_price >= basis:
             return {
                 "signal": "SELL",
-                "price": current_price,
-                "reason": f"Price touched/crossed basis ({basis:.2f})"
+                "price":  current_price,
+                "reason": f"Price returned to basis ({basis:.4f})"
             }
 
         return {"signal": "WAIT", "price": current_price, "reason": "No conditions met"}
