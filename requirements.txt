@@ -1,6 +1,6 @@
 pandas
 https://github.com/aarigs/pandas-ta/archive/refs/heads/master.zip
-streamlit
+streamlit>=1.35
 requests
 numpy
 yfinance
