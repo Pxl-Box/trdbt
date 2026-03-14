@@ -82,10 +82,11 @@ if api_key:
 
 @st.dialog("⚙️ Settings", width="large")
 def show_settings():
-    tab_api, tab_tickers, tab_strategy, tab_diag = st.tabs([
+    tab_api, tab_tickers, tab_strategy, tab_discovery, tab_diag = st.tabs([
         "🔑 API & Control",
         "📋 Watchlist",
         "🧠 Strategy",
+        "🌎 Discovery",
         "🛠 Diagnostics",
     ])
 
@@ -412,6 +413,71 @@ def show_settings():
             config.update(update)
             save_config(config)
             st.success("✅ Strategy saved.")
+
+    # ── Discovery ──────────────────────────────────────────────────────────
+    with tab_discovery:
+        st.subheader("Market Discovery")
+        st.caption("Fetch trending stocks from Yahoo Finance to expand your watchlist.")
+        
+        d_cols = st.columns(3)
+        list_type = d_cols[0].selectbox("Category", ["Day Losers", "Day Gainers", "Most Active"])
+        count = d_cols[1].number_input("Count", min_value=5, max_value=25, value=10)
+        
+        scr_id = {
+            "Day Losers": "day_losers",
+            "Day Gainers": "day_gainers",
+            "Most Active": "most_active"
+        }.get(list_type)
+
+        if d_cols[2].button("🔍 Refresh Discovery", use_container_width=True):
+            try:
+                url = f"https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?formatted=false&scrIds={scr_id}&count={count}"
+                resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                if resp.status_code == 200:
+                    st.session_state.discovery_data = resp.json().get('finance', {}).get('result', [{}])[0].get('quotes', [])
+                else:
+                    st.error(f"Failed to fetch: HTTP {resp.status_code}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        if "discovery_data" in st.session_state and st.session_state.discovery_data:
+            st.markdown("---")
+            if list_type == "Day Losers":
+                st.success("💡 **Strategy Tip**: Day Losers are excellent candidates for your **Mean Reversion** bot, as they are likely oversold.")
+            elif list_type == "Day Gainers":
+                st.warning("⚠️ **Strategy Warning**: Day Gainers are often 'overbought'. Buying now is high-risk for a Mean Reversion strategy.")
+
+            for q in st.session_state.discovery_data:
+                symbol = q.get('symbol')
+                name = q.get('displayName') or q.get('shortName') or ""
+                price = q.get('regularMarketPrice', 0.0)
+                change = q.get('regularMarketChangePercent', 0.0)
+                
+                c1, c2, c3 = st.columns([1, 2, 1])
+                c1.code(symbol)
+                c2.write(f"**{name}**")
+                color = "green" if change >= 0 else "red"
+                c3.markdown(f"<span style='color:{color}'>{change:+.2f}%</span>", unsafe_allow_html=True)
+                
+                # Suffix detection for T212
+                # Note: This is an estimate. T212 uses _US_EQ for US, but discovery results might need conversion.
+                t212_guess = symbol
+                if "_" not in symbol:
+                    if ".L" in symbol: t212_guess = f"{symbol.replace('.L', '')}_UK_EQ"
+                    elif ".PA" in symbol: t212_guess = f"{symbol.replace('.PA', '')}_BE_EQ" # Example
+                    else: t212_guess = f"{symbol}_US_EQ"
+
+                if st.button(f"➕ Add {symbol}", key=f"discovery_{symbol}"):
+                    if t212_guess not in st.session_state.tickers:
+                        st.session_state.tickers.append(t212_guess)
+                        st.success(f"Added {t212_guess} to watchlist!")
+                        # config["tickers"] = st.session_state.tickers
+                        # save_config(config)
+                        # st.rerun() # Could be jarring inside dialog, but usually needed for list update
+                    else:
+                        st.info(f"{t212_guess} is already in your watchlist.")
+        else:
+            st.info("Click 'Refresh Discovery' to see the latest trending stocks.")
 
     # ── Diagnostics & Logs ────────────────────────────────────────────────
     with tab_diag:
