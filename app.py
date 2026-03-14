@@ -533,6 +533,49 @@ except Exception:
 st.markdown(f"### {regime_label}")
 st.caption(regime_detail)
 
+# ── Active Market Sessions ──────────────────────────────────────────────
+st.markdown("---")
+st.subheader("🌐 Active Market Sessions")
+
+def is_ticker_open_ui(ticker):
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    _now_utc = _dt.now(_tz.utc)
+    # Crypto 24/7
+    if ticker.endswith("-USD") or "-USD" in ticker: return True
+    # EU / UK
+    if any(ticker.endswith(s) for s in [".PA", ".XC", ".L"]):
+        if _now_utc.weekday() >= 5: return False
+        _open_utc  = _now_utc.replace(hour=8, minute=0, second=0, microsecond=0)
+        _close_utc = _now_utc.replace(hour=16, minute=30, second=0, microsecond=0)
+        return _open_utc <= _now_utc <= _close_utc
+    # US Default
+    _now_et = _now_utc + _td(hours=-4)
+    if _now_et.weekday() >= 5: return False
+    _open_et  = _now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+    _close_et = _now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+    return _open_et <= _now_et <= _close_et
+
+tickers_in_config = config.get("tickers", [])
+if tickers_in_config:
+    open_list = [t for t in tickers_in_config if is_ticker_open_ui(t)]
+    closed_list = [t for t in tickers_in_config if not is_ticker_open_ui(t)]
+    
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        st.markdown(f"**🟢 Open ({len(open_list)})**")
+        if open_list:
+            st.caption(", ".join(open_list[:15]) + ("..." if len(open_list) > 15 else ""))
+        else:
+            st.caption("None")
+    with sc2:
+        st.markdown(f"**🔴 Closed ({len(closed_list)})**")
+        if closed_list:
+            st.caption(", ".join(closed_list[:15]) + ("..." if len(closed_list) > 15 else ""))
+        else:
+            st.caption("None")
+else:
+    st.info("No tickers in watchlist.")
+
 st.markdown("---")
 
 # ── Open positions ────────────────────────────────────────────────────────

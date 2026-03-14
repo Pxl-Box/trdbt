@@ -600,34 +600,52 @@ class TradingBot:
 
     #  Market Hours Guard 
 
-    def is_market_open(self) -> bool:
+    def is_ticker_session_open(self, ticker: str) -> bool:
         """
-        Returns True if the US equity market is currently open.
-        Regular session: 9:30am  4:00pm Eastern Time, Monday  Friday.
+        Detects exchange suffix and checks if the session is currently open.
         """
         if not self.config.get("market_hours_check", True):
             return True
+            
         try:
             from datetime import timedelta
-            # Approximate ET as UTC-4 (EDT)
-            now_et = (datetime.now(timezone.utc) + timedelta(hours=-4)).replace(
-                tzinfo=timezone.utc
-            )
+            now_utc = datetime.now(timezone.utc)
+            
+            # 1. Crypto - 24/7
+            if ticker.endswith("-USD") or "-USD" in ticker:
+                return True
+                
+            # 2. EU/London Suffixes
+            # .PA = Paris, .XC = XETRA, .L = London
+            if any(ticker.endswith(s) for s in [".PA", ".XC", ".L"]):
+                # Paris/XETRA: 9:00 - 17:30 CET (UTC+1)
+                # London: 8:00 - 16:30 GMT (UTC+0)
+                # Simplification: EU markets generally 8am-4:30pm UTC (approx)
+                # For precision, we use offsets. 
+                # Paris is UTC+1. 09:00 CET = 08:00 UTC. 17:30 CET = 16:30 UTC.
+                if now_utc.weekday() >= 5: return False
+                
+                open_utc  = now_utc.replace(hour=8, minute=0, second=0, microsecond=0)
+                close_utc = now_utc.replace(hour=16, minute=30, second=0, microsecond=0)
+                return open_utc <= now_utc <= close_utc
 
+            # 3. Default: US Equity Market
+            # 9:30am - 4:00pm ET (Approx UTC-4)
+            now_et = now_utc + timedelta(hours=-4)
             if now_et.weekday() >= 5:
-                logger.info(f"[hours] Market closed (weekend).")
                 return False
+                
+            open_et  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+            close_et = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+            return open_et <= now_et <= close_et
 
-            open_t  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
-            close_t = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
-            is_open = open_t <= now_et <= close_t
-
-            if not is_open:
-                logger.info(f"[hours] Market closed.")
-            return is_open
         except Exception as e:
-            logger.warning(f"[hours] Could not determine market status: {e}. Allowing analysis.")
+            logger.warning(f"[hours] Error checking session for {ticker}: {e}")
             return True
+
+    def is_market_open(self) -> bool:
+        """Deprecated in favour of is_ticker_session_open, but kept for logic safety."""
+        return True
 
     #  Market Regime Filter 
 
@@ -824,10 +842,7 @@ class TradingBot:
         # 3c. Trailing stop-loss bump
         self.check_trailing_stops(open_positions)
 
-        # 4. Market hours check  skip BUY analysis outside session
-        if not self.is_market_open():
-            logger.info("Market is closed  skipping BUY/SELL analysis this cycle.")
-            return
+        # 4. Global hours check removed in favour of per-ticker check below.
 
         # 5. Max-positions guard
         positions_full = self.at_max_positions(open_positions, active_orders)
@@ -846,6 +861,11 @@ class TradingBot:
         this_cycle_buys  = set()  # tickers still showing BUY this cycle
 
         for ticker in tickers:
+            # Per-ticker session check
+            if not self.is_ticker_session_open(ticker):
+                logger.info(f"[{ticker}] Market closed. Skipping.")
+                continue
+
             logger.info(f"Analyzing {ticker}...")
             try:
                 signal_data = self.strategy.analyze(ticker)
