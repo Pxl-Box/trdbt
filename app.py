@@ -216,65 +216,187 @@ def show_settings():
 
     # ── Strategy ──────────────────────────────────────────────────────────
     with tab_strategy:
-        preset_options = [
-            "Ultra Conservative", "Conservative", "Moderate",
-            "Aggressive", "Ultra Aggressive", "Manual Custom",
-        ]
-        preset_map = {
-            "Ultra Conservative": (20, 3.0, 14, 20),
-            "Conservative":       (20, 2.5, 14, 25),
-            "Moderate":           (20, 2.0, 14, 30),
-            "Aggressive":         (20, 1.5, 14, 40),
-            "Ultra Aggressive":   (10, 1.0,  7, 50),
+        # ───────────────────────────────────────────────────────────────────
+        # PRESET PROFILES — Add any new settings here so all presets stay in
+        # sync.  The save button below always iterates over the selected
+        # profile dict, so a new key added here is automatically
+        # applied/save when any preset is chosen.
+        # ───────────────────────────────────────────────────────────────────
+        PRESET_PROFILES = {
+            "Ultra Conservative": {
+                # Bollinger Bands
+                "bb_length":              20,
+                "bb_std":                 3.0,
+                # RSI
+                "rsi_length":             14,
+                "rsi_threshold":          20,
+                # Signal Scoring
+                "rsi_score_weight":       0.70,
+                "bb_score_weight":        0.30,
+                # Trailing Stops (ATR multiples)
+                "trailing_sl_tier1_atr":  2.0,
+                "trailing_sl_tier2_atr":  4.0,
+                # Regime & TP
+                "smart_regime_enabled":   True,
+                "tp_target_mode":         "Fixed: Mean (Middle BB)",
+                # Risk
+                "risk_per_trade_pct":     0.005,   # 0.5%
+                "sl_atr_multiplier":      2.0,
+                "max_open_positions":     3,
+                "capital_utilization_pct": 0.70,
+                # Timing
+                "cycle_interval_secs":    900,
+                "market_hours_check":     True,
+                "per_ticker_cooldown_mins": 60,
+            },
+            "Conservative": {
+                "bb_length":              20,
+                "bb_std":                 2.5,
+                "rsi_length":             14,
+                "rsi_threshold":          25,
+                "rsi_score_weight":       0.65,
+                "bb_score_weight":        0.35,
+                "trailing_sl_tier1_atr":  1.75,
+                "trailing_sl_tier2_atr":  3.5,
+                "smart_regime_enabled":   True,
+                "tp_target_mode":         "Fixed: Mean (Middle BB)",
+                "risk_per_trade_pct":     0.01,    # 1%
+                "sl_atr_multiplier":      1.75,
+                "max_open_positions":     5,
+                "capital_utilization_pct": 0.80,
+                "cycle_interval_secs":    900,
+                "market_hours_check":     True,
+                "per_ticker_cooldown_mins": 45,
+            },
+            "Moderate": {
+                "bb_length":              20,
+                "bb_std":                 2.0,
+                "rsi_length":             14,
+                "rsi_threshold":          30,
+                "rsi_score_weight":       0.60,
+                "bb_score_weight":        0.40,
+                "trailing_sl_tier1_atr":  1.5,
+                "trailing_sl_tier2_atr":  3.0,
+                "smart_regime_enabled":   True,
+                "tp_target_mode":         "Dynamic (Auto-Switch)",
+                "risk_per_trade_pct":     0.015,   # 1.5%
+                "sl_atr_multiplier":      1.5,
+                "max_open_positions":     7,
+                "capital_utilization_pct": 0.85,
+                "cycle_interval_secs":    900,
+                "market_hours_check":     True,
+                "per_ticker_cooldown_mins": 30,
+            },
+            "Aggressive": {
+                "bb_length":              20,
+                "bb_std":                 1.5,
+                "rsi_length":             14,
+                "rsi_threshold":          40,
+                "rsi_score_weight":       0.50,
+                "bb_score_weight":        0.50,
+                "trailing_sl_tier1_atr":  1.25,
+                "trailing_sl_tier2_atr":  2.5,
+                "smart_regime_enabled":   False,
+                "tp_target_mode":         "Dynamic (Auto-Switch)",
+                "risk_per_trade_pct":     0.02,    # 2%
+                "sl_atr_multiplier":      1.25,
+                "max_open_positions":     10,
+                "capital_utilization_pct": 0.90,
+                "cycle_interval_secs":    900,
+                "market_hours_check":     True,
+                "per_ticker_cooldown_mins": 20,
+            },
+            "Ultra Aggressive": {
+                "bb_length":              10,
+                "bb_std":                 1.0,
+                "rsi_length":             7,
+                "rsi_threshold":          50,
+                "rsi_score_weight":       0.40,
+                "bb_score_weight":        0.60,
+                "trailing_sl_tier1_atr":  1.0,
+                "trailing_sl_tier2_atr":  2.0,
+                "smart_regime_enabled":   False,
+                "tp_target_mode":         "Fixed: Upper Band",
+                "risk_per_trade_pct":     0.03,    # 3%
+                "sl_atr_multiplier":      1.0,
+                "max_open_positions":     15,
+                "capital_utilization_pct": 0.95,
+                "cycle_interval_secs":    900,
+                "market_hours_check":     False,
+                "per_ticker_cooldown_mins": 10,
+            },
         }
+
+        preset_options = list(PRESET_PROFILES.keys()) + ["Manual Custom"]
         cur_preset  = config.get("preset_mode", "Conservative")
         preset_idx  = preset_options.index(cur_preset) if cur_preset in preset_options else len(preset_options) - 1
         preset_mode = st.selectbox("Preset", preset_options, index=preset_idx)
 
-        if preset_mode in preset_map:
-            bb_len, bb_std, rsi_len, rsi_thr = preset_map[preset_mode]
-            pc = st.columns(4)
-            pc[0].metric("BB Length", bb_len)
-            pc[1].metric("BB StdDev", bb_std)
-            pc[2].metric("RSI Length", rsi_len)
-            pc[3].metric("RSI Buy ≤", rsi_thr)
+        if preset_mode in PRESET_PROFILES:
+            p = PRESET_PROFILES[preset_mode]
+            # Show preview metrics
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("BB Length", p["bb_length"])
+            col2.metric("BB StdDev", p["bb_std"])
+            col3.metric("RSI Length", p["rsi_length"])
+            col4.metric("RSI Buy ≤", p["rsi_threshold"])
+            col5, col6, col7, col8 = st.columns(4)
+            col5.metric("Risk/Trade", f"{p['risk_per_trade_pct']*100:.1f}%")
+            col6.metric("Max Positions", p["max_open_positions"])
+            col7.metric("Capital Use", f"{p['capital_utilization_pct']*100:.0f}%")
+            col8.metric("Cooldown", f"{p['per_ticker_cooldown_mins']}m")
+            r1, r2 = st.columns(2)
+            r1.info(f"🧭 Regime Filter: {'ON' if p['smart_regime_enabled'] else 'OFF'}")
+            r2.info(f"🎯 TP Mode: {p['tp_target_mode']}")
+            # Expose editable fields (disabled preview for preset values)
+            bb_len  = p["bb_length"];   bb_std  = p["bb_std"]
+            rsi_len = p["rsi_length"];  rsi_thr = p["rsi_threshold"]
+            rsi_w   = p["rsi_score_weight"]; bb_w = p["bb_score_weight"]
+            tier1   = p["trailing_sl_tier1_atr"]; tier2 = p["trailing_sl_tier2_atr"]
+            new_regime_enabled = p["smart_regime_enabled"]
+            new_tp_mode = p["tp_target_mode"]
         else:
+            # Manual Custom — show all sliders/inputs
             pc = st.columns(4)
             bb_len  = pc[0].number_input("BB Length",          value=int(config.get("bb_length",     20)))
             bb_std  = pc[1].number_input("BB StdDev",          value=float(config.get("bb_std",       2.0)), step=0.1)
             rsi_len = pc[2].number_input("RSI Length",         value=int(config.get("rsi_length",    14)))
             rsi_thr = pc[3].number_input("RSI Buy Threshold",  value=int(config.get("rsi_threshold", 30)))
 
-        st.markdown("---")
-        st.subheader("Signal Scoring Weights")
-        w1, w2 = st.columns(2)
-        rsi_w = w1.slider("RSI Weight", 0.0, 1.0, float(config.get("rsi_score_weight", 0.6)), step=0.05)
-        bb_w  = w2.slider("BB Weight",  0.0, 1.0, float(config.get("bb_score_weight",  0.4)), step=0.05)
-        if abs((rsi_w + bb_w) - 1.0) > 0.01:
-            st.warning(f"Weights sum to {rsi_w + bb_w:.2f} — should be 1.0.")
+            st.markdown("---")
+            st.subheader("Signal Scoring Weights")
+            w1, w2 = st.columns(2)
+            rsi_w = w1.slider("RSI Weight", 0.0, 1.0, float(config.get("rsi_score_weight", 0.6)), step=0.05)
+            bb_w  = w2.slider("BB Weight",  0.0, 1.0, float(config.get("bb_score_weight",  0.4)), step=0.05)
+            if abs((rsi_w + bb_w) - 1.0) > 0.01:
+                st.warning(f"Weights sum to {rsi_w + bb_w:.2f} — should be 1.0.")
 
-        st.subheader("Trailing Stop Tiers")
-        t1, t2 = st.columns(2)
-        tier1 = t1.number_input("Tier 1 ATR (break-even)", value=float(config.get("trailing_sl_tier1_atr", 1.5)), step=0.1)
-        tier2 = t2.number_input("Tier 2 ATR (lock profit)", value=float(config.get("trailing_sl_tier2_atr", 3.0)), step=0.1)
+            st.subheader("Trailing Stop Tiers")
+            t1c, t2c = st.columns(2)
+            tier1 = t1c.number_input("Tier 1 ATR (break-even)", value=float(config.get("trailing_sl_tier1_atr", 1.5)), step=0.1)
+            tier2 = t2c.number_input("Tier 2 ATR (lock profit)", value=float(config.get("trailing_sl_tier2_atr", 3.0)), step=0.1)
 
-        st.markdown("---")
-        st.subheader("🧭 Regime Switching & TP Optimisation")
-        new_regime_enabled = st.toggle(
-            "Smart Regime Filter (block buys when stock is in a downtrend)",
-            value=bool(config.get("smart_regime_enabled", False))
-        )
-        tp_modes = ["Dynamic (Auto-Switch)", "Fixed: Mean (Middle BB)", "Fixed: Upper Band"]
-        cur_tp_mode = config.get("tp_target_mode", "Fixed: Mean (Middle BB)")
-        new_tp_mode = st.selectbox(
-            "Take Profit Target",
-            tp_modes,
-            index=tp_modes.index(cur_tp_mode) if cur_tp_mode in tp_modes else 1
-        )
-        st.caption("Dynamic — targets Upper Band in bullish regime, Middle Band in bearish. Upper Band — always targets max profit. Mean — safe/conservative.")
+            st.markdown("---")
+            st.subheader("🧭 Regime Switching & TP Optimisation")
+            new_regime_enabled = st.toggle(
+                "Smart Regime Filter (block buys when stock is in a downtrend)",
+                value=bool(config.get("smart_regime_enabled", False))
+            )
+            tp_modes = ["Dynamic (Auto-Switch)", "Fixed: Mean (Middle BB)", "Fixed: Upper Band"]
+            cur_tp_mode = config.get("tp_target_mode", "Fixed: Mean (Middle BB)")
+            new_tp_mode = st.selectbox(
+                "Take Profit Target", tp_modes,
+                index=tp_modes.index(cur_tp_mode) if cur_tp_mode in tp_modes else 1
+            )
+            st.caption("Dynamic — targets Upper Band in bullish regime, Middle Band in bearish. Upper Band — always targets max profit. Mean — safe/conservative.")
 
         if st.button("💾 Save Strategy", use_container_width=True):
-            config.update({
+            # Build the update dict — start from the preset if one is selected,
+            # then layer in any overrides from Manual Custom inputs
+            update = {}
+            if preset_mode in PRESET_PROFILES:
+                update = dict(PRESET_PROFILES[preset_mode])
+            update.update({
                 "preset_mode":           preset_mode,
                 "bb_length":             int(bb_len),
                 "bb_std":                float(bb_std),
@@ -287,6 +409,7 @@ def show_settings():
                 "smart_regime_enabled":  new_regime_enabled,
                 "tp_target_mode":        new_tp_mode,
             })
+            config.update(update)
             save_config(config)
             st.success("✅ Strategy saved.")
 
