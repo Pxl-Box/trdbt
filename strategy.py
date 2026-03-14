@@ -70,6 +70,8 @@ class MeanReversionStrategy:
         rsi            = float(latest['RSI'])
         atr            = float(latest['ATR'])
 
+        diag = f"[Math: P={current_price:.2f}, RSI={rsi:.2f}, ATR={atr:.2f}, L_BB={lower_band:.2f}, M_BB={basis:.2f}]"
+
         # Previous candle values (for crossover logic)
         prev_close      = float(previous['Close'])
         lower_band_prev = float(previous[bbl_col]) if bbl_col else prev_close
@@ -78,7 +80,7 @@ class MeanReversionStrategy:
         candle_range = latest['High'] - latest['Low']
         if candle_range > 3 * atr:
             logger.warning(f"BLACK SWAN AVOIDED: {ticker} candle range {candle_range:.2f} > 3x ATR ({atr:.2f})")
-            return {"signal": "BLOCK", "reason": "High Volatility Black Swan"}
+            return {"signal": "BLOCK", "reason": f"High Volatility Black Swan {diag}"}
 
         # Volume Confirmation Filter
         if 'Volume' in df.columns:
@@ -89,7 +91,7 @@ class MeanReversionStrategy:
                     f"[{ticker}] Volume too low ({latest['Volume']:.0f} < "
                     f"{avg_volume * min_vol_pct:.0f} = {min_vol_pct*100:.0f}% of avg). Skipping signal."
                 )
-                return {"signal": "WAIT", "price": current_price, "reason": "Low volume – no conviction"}
+                return {"signal": "WAIT", "price": current_price, "reason": f"Low volume – no conviction {diag}"}
 
         # ── Entry Logic ───────────────────────────────────────────────────────
         # Require a FRESH crossover below the lower band (not just 'already below').
@@ -110,7 +112,7 @@ class MeanReversionStrategy:
                 "fresh_break":     True,
                 "reason": (
                     f"Fresh BB lower cross: prev={prev_close:.4f}>={lower_band_prev:.4f}, "
-                    f"now={current_price:.4f}<{lower_band:.4f} | RSI={rsi:.2f}"
+                    f"now={current_price:.4f}<{lower_band:.4f} | RSI={rsi:.2f} {diag}"
                 )
             }
 
@@ -119,10 +121,10 @@ class MeanReversionStrategy:
             return {
                 "signal": "SELL",
                 "price":  current_price,
-                "reason": f"Price returned to basis ({basis:.4f})"
+                "reason": f"Price returned to basis ({basis:.4f}) {diag}"
             }
 
-        return {"signal": "WAIT", "price": current_price, "reason": "No conditions met"}
+        return {"signal": "WAIT", "price": current_price, "reason": f"No conditions met {diag}"}
 
     def get_current_atr(self, ticker: str, multiplier: float = 1.0) -> float:
         """
