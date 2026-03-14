@@ -799,7 +799,12 @@ class TradingBot:
         w_rsi = self.config.get("rsi_score_weight", 0.6)
         w_bb  = self.config.get("bb_score_weight",  0.4)
 
-        return round((rsi_score * w_rsi) + (bb_score * w_bb * 100), 4)
+        final_score = round((rsi_score * w_rsi) + (bb_score * w_bb * 100), 4)
+        logger.info(
+            f"[{signal_data.get('ticker','SIGNAL')}] Scoring Math: "
+            f"(RSI_Score {rsi_score:.2f} * {w_rsi}) + (BB_Score {bb_score:.2f} * {w_bb} * 100) = {final_score}"
+        )
+        return final_score
 
     #  Main Cycle 
 
