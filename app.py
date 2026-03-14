@@ -320,6 +320,18 @@ def show_settings():
             size_kb = log_path.stat().st_size / 1024
             mtime   = datetime.datetime.fromtimestamp(log_path.stat().st_mtime)
             st.info(f"📄 `{LOG_FILE}` — **{size_kb:.1f} KB** | last modified **{mtime:%Y-%m-%d %H:%M:%S}**")
+            
+            with st.expander("Live Bot Trading Feed (Most Recent)"):
+                try:
+                    with open(LOG_FILE, "r") as f:
+                        lines = f.readlines()
+                        # Show last 30 lines, reversed so newest is at the top
+                        log_content = "".join(reversed(lines[-30:]))
+                        st.text_area("Recent Logs", log_content, height=300, label_visibility="collapsed")
+                        if st.button("Refresh Feed"):
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"Error reading log: {e}")
         else:
             st.info("Log file not found yet.")
 
