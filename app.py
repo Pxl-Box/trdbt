@@ -544,6 +544,7 @@ def is_ticker_open_ui(ticker):
     if ticker.endswith("-USD") or "-USD" in ticker: return True
     # EU / UK
     if any(ticker.endswith(s) for s in [".PA", ".XC", ".L"]):
+        # EU markets generally 8am-4:30pm UTC
         if _now_utc.weekday() >= 5: return False
         _open_utc  = _now_utc.replace(hour=8, minute=0, second=0, microsecond=0)
         _close_utc = _now_utc.replace(hour=16, minute=30, second=0, microsecond=0)

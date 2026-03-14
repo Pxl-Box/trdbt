@@ -17,6 +17,7 @@ class MeanReversionStrategy:
         self.rsi_threshold = rsi_threshold
         self.smart_regime_enabled = smart_regime_enabled
         self.tp_target_mode = tp_target_mode
+        self.volume_min_pct = 0.8  # Default volume threshold
 
     def get_historical_data(self, ticker: str, interval="15m", period="10d") -> pd.DataFrame:
         """
@@ -65,11 +66,12 @@ class MeanReversionStrategy:
         # Dynamically grab the BB column names since `pandas_ta` float formatting can trigger KeyError
         bbl_col = next((c for c in bbands.columns if c.startswith('BBL_')), None)
         bbm_col = next((c for c in bbands.columns if c.startswith('BBM_')), None)
+        bbu_col = next((c for c in bbands.columns if c.startswith('BBU_')), None)
         
         current_price  = float(latest['Close'])
         lower_band     = float(latest[bbl_col])  if bbl_col else current_price
         basis          = float(latest[bbm_col])  if bbm_col else current_price
-        upper_band     = float(latest.get(f'BBU_{self.bb_length}_{self.bb_std}', basis))
+        upper_band     = float(latest[bbu_col])  if bbu_col else (basis + (basis - lower_band))
         rsi            = float(latest['RSI'])
         atr            = float(latest['ATR'])
 
@@ -95,7 +97,7 @@ class MeanReversionStrategy:
         # Volume Confirmation Filter
         if 'Volume' in df.columns:
             avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
-            min_vol_pct = getattr(self, 'volume_min_pct', 0.8)
+            min_vol_pct = self.volume_min_pct
             if avg_volume and avg_volume > 0 and latest['Volume'] < avg_volume * min_vol_pct:
                 logger.info(
                     f"[{ticker}] Volume too low ({latest['Volume']:.0f} < "

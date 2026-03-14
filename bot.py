@@ -49,6 +49,11 @@ def to_t212_ticker(ticker: str) -> str:
     """Convert a bare yfinance-style ticker to the Trading212 instrument code."""
     if "_" in ticker or ticker in _NON_EQUITY:
         return ticker
+    # Heuristic: .PA = Euronext Paris, .XC = XETRA, .L = London
+    if ticker.endswith(".PA"): return f"{ticker.replace('.PA', '')}_BE_EQ" # Example mapping
+    if ticker.endswith(".XC"): return f"{ticker.replace('.XC', '')}_DE_EQ"
+    if ticker.endswith(".L"):  return f"{ticker.replace('.L', '')}_UK_EQ"
+    
     return f"{ticker}_US_EQ"
 
 #  Constants 
@@ -560,6 +565,31 @@ class TradingBot:
                 f"Order remains live on exchange. SL will be placed on next restart or when fill is confirmed."
             )
 
+    def wait_for_fill(self, order_id: int, timeout_secs: int = 60) -> bool:
+        """
+        Poll the API until the order is FILLED or the timeout is reached.
+        Returns True if filled, False otherwise.
+        """
+        start_t = time.time()
+        while (time.time() - start_t) < timeout_secs:
+            try:
+                order = self.client.get_order_by_id(order_id)
+                status = order.get("status", "").upper()
+                if status == "FILLED":
+                    logger.info(f"[fill] Order {order_id} filled.")
+                    return True
+                if status in ("CANCELLED", "REJECTED", "EXPIRED"):
+                    logger.warning(f"[fill] Order {order_id} stopped with status: {status}")
+                    return False
+                # Still working...
+            except Exception as e:
+                logger.error(f"[fill] Error polling order {order_id}: {e}")
+
+            time.sleep(FILL_POLL_INTERVAL)
+
+        logger.warning(f"[fill] Timeout waiting for order {order_id} to fill.")
+        return False
+
     def handle_sell(self, ticker: str):
         """
         Close position at market, cancel associated SL and TP orders.
@@ -642,10 +672,6 @@ class TradingBot:
         except Exception as e:
             logger.warning(f"[hours] Error checking session for {ticker}: {e}")
             return True
-
-    def is_market_open(self) -> bool:
-        """Deprecated in favour of is_ticker_session_open, but kept for logic safety."""
-        return True
 
     #  Market Regime Filter 
 
