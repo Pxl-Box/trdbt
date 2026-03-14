@@ -10,13 +10,15 @@ class MeanReversionStrategy:
     Implements the core strategic logic for the trading bot based on Bollinger Bands,
     RSI, and an ATR Black Swan filter. Uses yfinance for reliable market data.
     """
-    def __init__(self, bb_length=20, bb_std=2.0, rsi_length=14, rsi_threshold=30):
+    def __init__(self, bb_length=20, bb_std=2.0, rsi_length=14, rsi_threshold=30, smart_regime_enabled=False, tp_target_mode="Mean"):
         self.bb_length = bb_length
         self.bb_std = bb_std
         self.rsi_length = rsi_length
         self.rsi_threshold = rsi_threshold
+        self.smart_regime_enabled = smart_regime_enabled
+        self.tp_target_mode = tp_target_mode
 
-    def get_historical_data(self, ticker: str, interval="15m", period="5d") -> pd.DataFrame:
+    def get_historical_data(self, ticker: str, interval="15m", period="10d") -> pd.DataFrame:
         """
         Fetches historical OHLCV data to compute indicators natively.
         Uses 15-minute candles by default for intra-day mean reversion.
@@ -67,10 +69,18 @@ class MeanReversionStrategy:
         current_price  = float(latest['Close'])
         lower_band     = float(latest[bbl_col])  if bbl_col else current_price
         basis          = float(latest[bbm_col])  if bbm_col else current_price
+        upper_band     = float(latest.get(f'BBU_{self.bb_length}_{self.bb_std}', basis))
         rsi            = float(latest['RSI'])
         atr            = float(latest['ATR'])
 
-        diag = f"[Math: P={current_price:.2f}, RSI={rsi:.2f}, ATR={atr:.2f}, L_BB={lower_band:.2f}, M_BB={basis:.2f}]"
+        # Regime Detection (SMA 100 on 15m)
+        df['SMA100'] = ta.sma(df['Close'], length=100)
+        sma100 = df['SMA100'].iloc[-1]
+        if pd.isna(sma100):
+            sma100 = current_price  # fallback
+        regime = "BULLISH" if current_price > sma100 else "BEARISH"
+
+        diag = f"[Math: P={current_price:.2f}, RSI={rsi:.2f}, ATR={atr:.2f}, Regime={regime}]"
 
         # Previous candle values (for crossover logic)
         prev_close      = float(previous['Close'])
@@ -101,18 +111,32 @@ class MeanReversionStrategy:
         fresh_break = (prev_close >= lower_band_prev) and (current_price < lower_band)
 
         if fresh_break and rsi < self.rsi_threshold:
+            # Smart Regime Filter
+            if self.smart_regime_enabled and regime == "BEARISH":
+                logger.info(f"[{ticker}] BUY skipped due to Smart Regime Filter (Regime=BEARISH, P={current_price:.2f} < SMA100={sma100:.2f})")
+                return {"signal": "WAIT", "price": current_price, "reason": f"Regime filter blocked {diag}"}
+
             bb_pct_below = ((lower_band - current_price) / lower_band) * 100
+            
+            # Take Profit Optimisation
+            if self.tp_target_mode == "Upper Band":
+                target_tp = upper_band
+            elif self.tp_target_mode == "Dynamic (Auto-Switch)":
+                target_tp = upper_band if regime == "BULLISH" else basis
+            else:
+                target_tp = basis
+
             return {
                 "signal":          "BUY",
                 "price":           current_price,
-                "target_tp":       basis,
+                "target_tp":       target_tp,
                 "rsi":             rsi,
                 "bb_pct_below":    float(bb_pct_below),
                 "atr":             atr,
                 "fresh_break":     True,
                 "reason": (
                     f"Fresh BB lower cross: prev={prev_close:.4f}>={lower_band_prev:.4f}, "
-                    f"now={current_price:.4f}<{lower_band:.4f} | RSI={rsi:.2f} {diag}"
+                    f"now={current_price:.4f}<{lower_band:.4f} | RSI={rsi:.2f} | TP Target={target_tp:.2f} {diag}"
                 )
             }
 

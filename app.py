@@ -258,6 +258,21 @@ def show_settings():
         tier1 = t1.number_input("Tier 1 ATR (break-even)", value=float(config.get("trailing_sl_tier1_atr", 1.5)), step=0.1)
         tier2 = t2.number_input("Tier 2 ATR (lock profit)", value=float(config.get("trailing_sl_tier2_atr", 3.0)), step=0.1)
 
+        st.markdown("---")
+        st.subheader("🧭 Regime Switching & TP Optimisation")
+        new_regime_enabled = st.toggle(
+            "Smart Regime Filter (block buys when stock is in a downtrend)",
+            value=bool(config.get("smart_regime_enabled", False))
+        )
+        tp_modes = ["Dynamic (Auto-Switch)", "Fixed: Mean (Middle BB)", "Fixed: Upper Band"]
+        cur_tp_mode = config.get("tp_target_mode", "Fixed: Mean (Middle BB)")
+        new_tp_mode = st.selectbox(
+            "Take Profit Target",
+            tp_modes,
+            index=tp_modes.index(cur_tp_mode) if cur_tp_mode in tp_modes else 1
+        )
+        st.caption("Dynamic — targets Upper Band in bullish regime, Middle Band in bearish. Upper Band — always targets max profit. Mean — safe/conservative.")
+
         if st.button("💾 Save Strategy", use_container_width=True):
             config.update({
                 "preset_mode":           preset_mode,
@@ -269,6 +284,8 @@ def show_settings():
                 "bb_score_weight":       bb_w,
                 "trailing_sl_tier1_atr": tier1,
                 "trailing_sl_tier2_atr": tier2,
+                "smart_regime_enabled":  new_regime_enabled,
+                "tp_target_mode":        new_tp_mode,
             })
             save_config(config)
             st.success("✅ Strategy saved.")
@@ -367,6 +384,31 @@ m2.metric("💵 Free Cash",      f"£{float(equity.get('free',     0)):.2f}")
 m3.metric("📈 Invested",       f"£{float(equity.get('invested', 0)):.2f}")
 ppl = float(equity.get("ppl", 0))
 m4.metric("🔄 Unrealised P/L", f"£{ppl:.2f}", delta=f"{ppl:.2f}")
+
+st.markdown("---")
+
+# ── Market Regime Indicator ───────────────────────────────────────────────
+try:
+    import yfinance as yf
+    import pandas as _pd
+    _spy = yf.download("SPY", period="90d", interval="1d", progress=False)
+    if not _spy.empty:
+        if isinstance(_spy.columns, _pd.MultiIndex):
+            _spy.columns = _spy.columns.droplevel(1)
+        _sma50 = float(_spy['Close'].rolling(50).mean().iloc[-1])
+        _cur   = float(_spy['Close'].iloc[-1])
+        _bullish = _cur > _sma50
+        regime_label  = "🟢 BULLISH Market" if _bullish else "🔴 BEARISH Market"
+        regime_detail = f"SPY @ {_cur:.2f} vs 50-SMA {_sma50:.2f}"
+    else:
+        regime_label  = "⚪ Regime Unknown"
+        regime_detail = "SPY data unavailable"
+except Exception:
+    regime_label  = "⚪ Regime Unknown"
+    regime_detail = "Could not fetch SPY data"
+
+st.markdown(f"### {regime_label}")
+st.caption(regime_detail)
 
 st.markdown("---")
 

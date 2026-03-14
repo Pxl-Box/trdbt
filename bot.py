@@ -131,7 +131,9 @@ class TradingBot:
             bb_length=self.config.get("bb_length", 20),
             bb_std=self.config.get("bb_std", 2.0),
             rsi_length=self.config.get("rsi_length", 14),
-            rsi_threshold=self.config.get("rsi_threshold", 30)
+            rsi_threshold=self.config.get("rsi_threshold", 30),
+            smart_regime_enabled=self.config.get("smart_regime_enabled", False),
+            tp_target_mode=self.config.get("tp_target_mode", "Mean")
         )
         return True
 
