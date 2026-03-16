@@ -14,6 +14,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Paths
+ROOT_DIR = Path(__file__).parent.parent
+TICKERS_FILE = ROOT_DIR / "trdbt_tickers.json"
+
 def load_node_config():
     config_path = ROOT_DIR / "node_config.json"
     if config_path.exists():
@@ -30,10 +33,6 @@ SHARED_DRIVE_DIR = NODE_CONFIG.get("shared_drive_path", r"D:\trd-data")
 BASE_DIR = Path(SHARED_DRIVE_DIR) if SHARED_DRIVE_DIR else Path(__file__).parent
 RAW_DATA_DIR = BASE_DIR / "raw_data"
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-# The tickers file remains in the local git repository
-ROOT_DIR = Path(__file__).parent.parent
-TICKERS_FILE = ROOT_DIR / "trdbt_tickers.json"
 
 def load_tickers() -> list:
     """Loads all tickers from the central config file."""
