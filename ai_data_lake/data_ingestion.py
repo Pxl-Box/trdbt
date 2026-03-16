@@ -45,25 +45,51 @@ def load_tickers() -> list:
             data = json.load(f)
             
         all_tickers = []
-        for sector, tickers in data.items():
-            all_tickers.extend(tickers)
+        # Priority 1: Use the combined_list if present
+        if "combined_list" in data:
+            all_tickers = data["combined_list"]
+        # Priority 2: Iterate through categories if combined_list is missing
+        elif "categories" in data:
+            for sector, tickers in data["categories"].items():
+                if isinstance(tickers, list):
+                    all_tickers.extend(tickers)
+        
         return list(set(all_tickers)) # Deduplicate
     except Exception as e:
         logger.error(f"Failed to load tickers: {e}")
         return []
+
+def clean_ticker(ticker: str) -> str:
+    """
+    Cleans Trading 212 specific suffixes from tickers to make them Yahoo-compatible.
+    Example: IBIT_US_EQ -> IBIT
+    """
+    if not isinstance(ticker, str):
+        return ticker
+        
+    # Common T212 suffixes
+    suffixes = ["_US_EQ", "_UK_EQ", "_LSE_EQ", "_DE_EQ"]
+    cleaned = ticker
+    for s in suffixes:
+        cleaned = cleaned.replace(s, "")
+    
+    return cleaned.strip()
 
 def download_ticker_history(ticker: str, period: str = "max", interval: str = "1d"):
     """
     Downloads full historical data for a ticker and saves it to Parquet.
     We use Parquet because it is vastly faster and smaller than CSV for ML workflows.
     """
-    logger.info(f"[{ticker}] Downloading history. Period: {period}, Interval: {interval}")
+    logger.info(f"[{ticker}] Processing history. Period: {period}, Interval: {interval}")
     
     try:
-        # T212 format usually strips endings or adds them, but yfinance needs standard.
-        # If the ticker has a strange T212 suffix, we might need to strip it.
-        # For our system, the json usually holds standard YF tickers.
-        yf_ticker = yf.Ticker(ticker)
+        # Step 1: Clean the ticker (remove T212 suffixes like _US_EQ)
+        yf_symbol = clean_ticker(ticker)
+        
+        if yf_symbol != ticker:
+            logger.info(f"[{ticker}] Cleaned to Yahoo symbol: {yf_symbol}")
+            
+        yf_ticker = yf.Ticker(yf_symbol)
         df = yf_ticker.history(period=period, interval=interval, auto_adjust=True)
         
         if df.empty:
