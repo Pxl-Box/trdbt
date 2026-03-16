@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from strategy import MeanReversionStrategy
 from trading212_client import Trading212Client
+from quant_inference import QuantInference
 
 #  Logging Setup 
 # Logs rotate daily in the logs/ subfolder, 30 days retained.
@@ -70,6 +71,10 @@ class TradingBot:
         self.state    = self.load_state()
         self.client   = None
         self.strategy = None
+        
+        # Initialize AI Inference engine with config-defined path
+        model_path = self.config.get("ml_model_path", None)
+        self.quant_engine = QuantInference(model_path=model_path) if model_path else QuantInference()
 
     #  Config / State I/O 
 
@@ -477,9 +482,27 @@ class TradingBot:
             logger.warning(f"[{ticker}] Invalid SL distance ({sl_distance:.4f}) skipping.")
             return
 
-        # Fixed-risk position sizing
+        # Position sizing (Fixed vs Quant/Kelly)
         total_equity  = float(getattr(self, '_cycle_equity', available_capital))
-        risk_pct      = float(self.config.get("risk_per_trade_pct", 0.01))
+        quant_enabled = self.config.get("quant_sizing_enabled", False)
+        
+        tp_distance = target_tp - price
+        
+        if quant_enabled and hasattr(self, 'quant_engine'):
+            win_prob = float(signal_data.get("ai_win_prob", 0.60)) # Default/Mock until AI fully wired
+            if tp_distance > 0 and sl_distance > 0:
+                reward_risk_ratio = tp_distance / sl_distance
+                risk_pct = self.quant_engine.calculate_kelly_fraction(
+                    win_prob=win_prob, 
+                    reward_risk_ratio=reward_risk_ratio,
+                    max_allocation=0.05
+                )
+                logger.info(f"[{ticker}] 🤖 Quant Sizing: WinProb={win_prob:.2f}, R:R={reward_risk_ratio:.2f} -> Kelly {risk_pct*100:.2f}%")
+            else:
+                risk_pct = float(self.config.get("risk_per_trade_pct", 0.01))
+        else:
+            risk_pct = float(self.config.get("risk_per_trade_pct", 0.01))
+            
         risk_amount   = total_equity * risk_pct
         risk_qty      = round(risk_amount / sl_distance, 4)
         max_qty       = round(available_capital / price, 4)
@@ -632,42 +655,26 @@ class TradingBot:
 
     def is_ticker_session_open(self, ticker: str) -> bool:
         """
-        Detects exchange suffix and checks if the session is currently open.
+        Checks if the session is currently open.
+        Trading212 supports 24/5 trading for most US equities, 
+        so we simplify this to allow weekday trading and block weekends.
         """
         if not self.config.get("market_hours_check", True):
             return True
             
         try:
-            from datetime import timedelta
             now_utc = datetime.now(timezone.utc)
             
-            # 1. Crypto - 24/7
+            # Crypto is 24/7
             if ticker.endswith("-USD") or "-USD" in ticker:
                 return True
                 
-            # 2. EU/London Suffixes
-            # .PA = Paris, .XC = XETRA, .L = London
-            if any(ticker.endswith(s) for s in [".PA", ".XC", ".L"]):
-                # Paris/XETRA: 9:00 - 17:30 CET (UTC+1)
-                # London: 8:00 - 16:30 GMT (UTC+0)
-                # Simplification: EU markets generally 8am-4:30pm UTC (approx)
-                # For precision, we use offsets. 
-                # Paris is UTC+1. 09:00 CET = 08:00 UTC. 17:30 CET = 16:30 UTC.
-                if now_utc.weekday() >= 5: return False
-                
-                open_utc  = now_utc.replace(hour=8, minute=0, second=0, microsecond=0)
-                close_utc = now_utc.replace(hour=16, minute=30, second=0, microsecond=0)
-                return open_utc <= now_utc <= close_utc
-
-            # 3. Default: US Equity Market
-            # 9:30am - 4:00pm ET (Approx UTC-4)
-            now_et = now_utc + timedelta(hours=-4)
-            if now_et.weekday() >= 5:
+            # Equities are 24/5 on Trading212
+            # Block Saturday (5) and Sunday (6)
+            if now_utc.weekday() >= 5:
                 return False
                 
-            open_et  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
-            close_et = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
-            return open_et <= now_et <= close_et
+            return True
 
         except Exception as e:
             logger.warning(f"[hours] Error checking session for {ticker}: {e}")
@@ -691,17 +698,23 @@ class TradingBot:
             return False  # filter disabled
         try:
             import yfinance as yf
+            import math
             df = yf.download(regime_ticker, period="90d", interval="1d", progress=False)
             if df.empty or len(df) < 50:
                 logger.warning("[regime] Not enough data to evaluate market regime  allowing BUYs.")
                 return False
             if isinstance(df.columns, __import__('pandas').MultiIndex):
                 df.columns = df.columns.droplevel(1)
-            sma50 = df['Close'].rolling(50).mean().iloc[-1]
+            sma50 = float(df['Close'].rolling(50).mean().iloc[-1])
             current = float(df['Close'].iloc[-1])
-            bearish = current < float(sma50)
+
+            if math.isnan(current) or math.isnan(sma50):
+                logger.warning(f"[regime] {regime_ticker} returned NaN. Defaulting to BEARISH to suppress risky BUYs.")
+                return True
+
+            bearish = current < sma50
             logger.info(
-                f"[regime] {regime_ticker} @ {current:.2f} vs 50-SMA {float(sma50):.2f} "
+                f"[regime] {regime_ticker} @ {current:.2f} vs 50-SMA {sma50:.2f} "
                 f"-> {'BEARISH    suppressing BUYs' if bearish else 'BULLISH '}"
             )
             return bearish
@@ -899,7 +912,7 @@ class TradingBot:
 
             logger.info(f"Analyzing {ticker}...")
             try:
-                signal_data = self.strategy.analyze(ticker)
+                signal_data = self.strategy.analyze(ticker, quant_engine=getattr(self, 'quant_engine', None))
             except Exception as e:
                 logger.error(f"[{ticker}] Strategy error: {e}", exc_info=True)
                 time.sleep(1)

@@ -1,0 +1,20 @@
+# Node 1 (Data Lake) + Node 2 (Deep Trainer) Requirements
+# Install on your 24/7 30TB Server
+
+# Core data science stack
+pandas
+numpy
+
+# Market data
+yfinance
+
+# Technical indicators
+https://github.com/aarigs/pandas-ta/archive/refs/heads/master.zip
+
+# Efficient data storage (Parquet files)
+pyarrow
+fastparquet
+
+# Machine Learning + GPU acceleration
+scikit-learn
+xgboost[cuda]  # Includes CUDA GPU support for XGBoost

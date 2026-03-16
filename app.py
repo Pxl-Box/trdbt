@@ -146,16 +146,21 @@ def show_settings():
         tickers = st.session_state.tickers
         st.subheader(f"Watchlist ({len(tickers)} tickers)")
 
+        with st.expander("🕒 Market Hours (UK Time)"):
+            st.markdown("""
+            **🇺🇸 US Markets (Regular):** 14:30 - 21:00  
+            **🇺🇸 US Markets (T212 24/5):** 01:00 Mon - 01:00 Sat  
+            **🇬🇧 UK Markets (LSE):** 08:00 - 16:30  
+            **🇪🇺 EU Markets:** 08:00 - 16:30  
+            **🪙 Crypto:** 24/7  
+            """)
+
         if tickers:
             cols = st.columns(5)
-            for i, t in enumerate(tickers):
-                cols[i % 5].code(t)
-
-            st.markdown("---")
-            remove_choice = st.selectbox("Remove a Ticker", [""] + tickers)
-            if st.button("🗑 Remove") and remove_choice:
-                st.session_state.tickers.remove(remove_choice)
-                st.rerun()
+            for i, t in enumerate(list(tickers)):
+                if cols[i % 5].button(f"🗑️ {t}", key=f"del_{t}", help=f"Delete {t}", use_container_width=True):
+                    st.session_state.tickers.remove(t)
+                    st.rerun()
         else:
             st.info("No tickers yet. Add some below.")
 
@@ -391,6 +396,20 @@ def show_settings():
             )
             st.caption("Dynamic — targets Upper Band in bullish regime, Middle Band in bearish. Upper Band — always targets max profit. Mean — safe/conservative.")
 
+            st.markdown("---")
+            st.subheader("🤖 AI Inference & Quant Sizing")
+            new_quant_sizing = st.toggle(
+                "Enable Kelly Criterion Sizing (Tri-Node Architecture)",
+                value=bool(config.get("quant_sizing_enabled", False))
+            )
+            st.caption("When enabled, the bot bypasses the static Risk/Trade % and dynamically calculates optimal bet size using the Kelly Criterion formula based on Win Probability and TP/SL setup. Requires `quant_inference.py` output.")
+            
+            new_quant_path = st.text_input(
+                "AI Model Local Path (.pkl file)",
+                value=config.get("ml_model_path", "trained_models/ai_brain_v1.pkl"),
+                help="The path to the .pkl model on this local machine. Train the model on your Deep Trainer, then copy it here."
+            )
+
         if st.button("💾 Save Strategy", use_container_width=True):
             # Build the update dict — start from the preset if one is selected,
             # then layer in any overrides from Manual Custom inputs
@@ -409,6 +428,8 @@ def show_settings():
                 "trailing_sl_tier2_atr": tier2,
                 "smart_regime_enabled":  new_regime_enabled,
                 "tp_target_mode":        new_tp_mode,
+                "quant_sizing_enabled":  new_quant_sizing,
+                "ml_model_path":         new_quant_path,
             })
             config.update(update)
             save_config(config)

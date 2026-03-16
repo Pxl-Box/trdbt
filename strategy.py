@@ -2,6 +2,7 @@ import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,14 @@ class MeanReversionStrategy:
             logger.error(f"Failed to fetch data for {ticker}: {e}")
             return pd.DataFrame()
 
-    def analyze(self, ticker: str) -> dict:
+    def analyze(self, ticker: str, quant_engine=None) -> dict:
         """
         Calculates indicators and returns a dictionary with current signals.
+        If a quant_engine is provided containing an ML model, features are engineered
+        and an AI probability score is attached.
         """
-        df = self.get_historical_data(ticker)
-        if df.empty or len(df) < max(self.bb_length, self.rsi_length):
+        df = self.get_historical_data(ticker, interval="1d", period="3mo") # Need 1d for ML features, at least 60 days
+        if df.empty or len(df) < 50:
             return {"signal": "NEUTRAL", "reason": "Not enough data"}
 
         # Calculate Indicators using pandas_ta
@@ -105,7 +108,59 @@ class MeanReversionStrategy:
                 )
                 return {"signal": "WAIT", "price": current_price, "reason": f"Low volume – no conviction {diag}"}
 
+        # --- AI ML Inference (Node 3 Execution) ---
+        ai_win_prob = 0.50
+        if quant_engine and quant_engine.is_ai_active():
+            try:
+                # Calculate required ML features for the very last row
+                features = {}
+                features['ret_1d'] = np.log(current_price / df['Close'].iloc[-2]) if len(df)>1 else 0
+                features['ret_5d'] = np.log(current_price / df['Close'].iloc[-6]) if len(df)>5 else 0
+                features['ret_20d'] = np.log(current_price / df['Close'].iloc[-21]) if len(df)>20 else 0
+                
+                sma20 = df['Close'].rolling(20).mean().iloc[-1]
+                sma50 = df['Close'].rolling(50).mean().iloc[-1]
+                features['dist_sma_20'] = (current_price - sma20) / sma20 if sma20 else 0
+                features['dist_sma_50'] = (current_price - sma50) / sma50 if sma50 else 0
+                
+                features['rsi_14'] = rsi
+                macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+                features['macd_hist'] = float(macd.iloc[-1, 1]) if macd is not None and not macd.empty else 0
+                
+                features['daily_range_pct'] = (latest['High'] - latest['Low']) / current_price
+                log_ret = np.log(df['Close'] / df['Close'].shift(1))
+                features['volatility_20d'] = log_ret.rolling(20).std().iloc[-1]
+                
+                features['vol_surge'] = latest['Volume'] / avg_volume if avg_volume > 0 else 1.0
+
+                # Must match exact DataFrame shape expected by the model
+                feature_df = pd.DataFrame([features])
+                
+                # Drop NaNs by filling with 0 (safe fallback)
+                feature_df.fillna(0, inplace=True)
+                
+                ai_win_prob = quant_engine.get_win_probability(feature_df)
+                diag += f" [AI Prob: {ai_win_prob*100:.1f}%]"
+            except Exception as e:
+                logger.warning(f"[{ticker}] AI Inference feature generation failed: {e}")
+
         # ── Entry Logic ───────────────────────────────────────────────────────
+        # AI OVERRIDE: If the Deep Learning model is highly confident, bypass dumb math
+        if quant_engine and quant_engine.is_ai_active() and ai_win_prob >= 0.65:
+            # Need a TP target for the bot to execute against
+            target_tp = upper_band if self.tp_target_mode != "Fixed: Mean (Middle BB)" else basis
+            return {
+                "signal":          "BUY",
+                "price":           current_price,
+                "target_tp":       target_tp,
+                "rsi":             rsi,
+                "bb_pct_below":    0.0,
+                "atr":             atr,
+                "ai_win_prob":     ai_win_prob,
+                "fresh_break":     True,
+                "reason": f"🤖 AI High Conviction Buy (Prob: {ai_win_prob*100:.1f}%) {diag}"
+            }
+
         # Require a FRESH crossover below the lower band (not just 'already below').
         # Previous candle must have closed AT or ABOVE the lower band, and the
         # current candle must close BELOW it.  This prevents chasing stocks that
@@ -135,6 +190,7 @@ class MeanReversionStrategy:
                 "rsi":             rsi,
                 "bb_pct_below":    float(bb_pct_below),
                 "atr":             atr,
+                "ai_win_prob":     ai_win_prob,
                 "fresh_break":     True,
                 "reason": (
                     f"Fresh BB lower cross: prev={prev_close:.4f}>={lower_band_prev:.4f}, "
