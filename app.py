@@ -407,8 +407,20 @@ def show_settings():
             new_quant_path = st.text_input(
                 "AI Model Local Path (.pkl file)",
                 value=config.get("ml_model_path", "trained_models/ai_brain_v1.pkl"),
-                help="The path to the .pkl model on this local machine. Train the model on your Deep Trainer, then copy it here."
+                help="The path to the .pkl model on this local machine."
             )
+
+            st.write("📤 **Upload New Brain**")
+            uploaded_file = st.file_uploader("Upload .pkl model", type=["pkl"])
+            if uploaded_file is not None:
+                # Ensure directory exists
+                save_path = Path(new_quant_path)
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(save_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                st.success(f"✅ Success! Brain saved to `{new_quant_path}`")
+                st.balloons()
 
         if st.button("💾 Save Strategy", use_container_width=True):
             # Build the update dict — start from the preset if one is selected,

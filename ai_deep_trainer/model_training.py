@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 from sklearn.metrics import classification_report, accuracy_score
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 
 # Setup Logging
 logging.basicConfig(
@@ -30,7 +30,7 @@ def load_node_config():
             logger.error(f"Error loading node_config.json: {e}")
     return {}
 
-NODE_CONFIG = load_node_config()
+NODE_CONFIG: dict = load_node_config()
 SHARED_DRIVE_PATH = NODE_CONFIG.get("shared_drive_path", r"D:\trd-data")
 
 _LOCAL_DIR = Path(__file__).parent
@@ -109,18 +109,58 @@ def train_and_export_model():
         num_losses = len(y) - num_wins
         scale_weight = num_losses / num_wins if num_wins > 0 else 1.0
         
-        logger.info(f"Initializing XGBClassifier with GPU Acceleration (scale_pos_weight={scale_weight:.2f})...")
+        # Check for Turbo Mode (Hyperparameter Tuning)
+        is_turbo = NODE_CONFIG.get("deep_trainer", {}).get("turbo_mode", False)
         
-        baseline_params = {
-            'n_estimators': 200,
-            'max_depth': 5,
-            'learning_rate': 0.05,
-            'random_state': 42,
-            'scale_pos_weight': scale_weight,
-            'tree_method': 'hist', # Required for GPU acceleration
-            'device': 'cuda',      # Instructs XGBoost to use the Nvidia GPU
-            'n_jobs': -1           # Max CPU threads for data ingestion/prep
-        }
+        if is_turbo:
+            logger.info("🚀 TURBO MODE ENABLED: Starting High-Intensity Hyperparameter Optimization...")
+            
+            param_grid = {
+                'n_estimators': [200, 500, 1000],
+                'max_depth': [4, 6, 8, 10],
+                'learning_rate': [0.01, 0.05, 0.1],
+                'subsample': [0.7, 0.8, 0.9],
+                'colsample_bytree': [0.7, 0.8, 0.9],
+                'gamma': [0, 0.1, 0.2]
+            }
+            
+            base_model = xgb.XGBClassifier(
+                tree_method='hist',
+                device='cuda',
+                random_state=42,
+                scale_pos_weight=scale_weight
+            )
+            
+            # Use RandomizedSearch with TimeSeriesSplit
+            search = RandomizedSearchCV(
+                estimator=base_model,
+                param_distributions=param_grid,
+                n_iter=20, # Try 20 different combinations
+                scoring='accuracy',
+                cv=tscv,
+                verbose=1,
+                random_state=42
+            )
+            
+            logger.info("Searching for the best possible model parameters (this will take longer)...")
+            search.fit(X, y)
+            
+            baseline_params = search.best_params_
+            logger.info(f"🏆 Best Parameters Found: {baseline_params}")
+            logger.info(f"🏆 Best Score: {search.best_score_ * 100:.2f}%")
+        else:
+            logger.info(f"Initializing standard XGBClassifier with GPU Acceleration (scale_pos_weight={scale_weight:.2f})...")
+            
+            baseline_params = {
+                'n_estimators': 200,
+                'max_depth': 5,
+                'learning_rate': 0.05,
+                'random_state': 42,
+                'scale_pos_weight': scale_weight,
+                'tree_method': 'hist', # Required for GPU acceleration
+                'device': 'cuda',      # Instructs XGBoost to use the Nvidia GPU
+                'n_jobs': -1           # Max CPU threads for data ingestion/prep
+            }
         
         model = xgb.XGBClassifier(**baseline_params)
         
@@ -146,7 +186,7 @@ def train_and_export_model():
         # Train the final model on 100% of the data to deploy
         logger.info("Training final deployable 'Brain' on ALL historical data using GPU...")
         
-        final_params = baseline_params.copy()
+        final_params = dict(baseline_params.copy())
         final_params['n_estimators'] = 500 # Train harder on the full dataset
         final_params['max_depth'] = 6
         

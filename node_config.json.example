@@ -10,6 +10,7 @@
     },
     "deep_trainer": {
         "retrain_interval_hours": 12,
-        "gpu_device": "cuda"
+        "gpu_device": "cuda",
+        "turbo_mode": false
     }
 }
