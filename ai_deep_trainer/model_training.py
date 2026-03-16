@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 import pickle
 import time
 from datetime import datetime
@@ -18,13 +19,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Paths
-# Configure this to point to your 30TB Shared Network Drive
-SHARED_DATA_LAKE_DIR = None
-SHARED_MODELS_DIR = None
+def load_node_config():
+    root_dir = Path(__file__).parent.parent
+    config_path = root_dir / "node_config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading node_config.json: {e}")
+    return {}
+
+NODE_CONFIG = load_node_config()
+SHARED_DRIVE_PATH = NODE_CONFIG.get("shared_drive_path", r"D:\trd-data")
 
 _LOCAL_DIR = Path(__file__).parent
-DATA_LAKE_DIR = Path(SHARED_DATA_LAKE_DIR) / "processed_data" if SHARED_DATA_LAKE_DIR else _LOCAL_DIR.parent / "ai_data_lake" / "processed_data"
-MODELS_DIR = Path(SHARED_MODELS_DIR) if SHARED_MODELS_DIR else _LOCAL_DIR / "trained_models"
+DATA_LAKE_DIR = Path(SHARED_DRIVE_PATH) / "processed_data" if SHARED_DRIVE_PATH else _LOCAL_DIR.parent / "ai_data_lake" / "processed_data"
+MODELS_DIR = Path(SHARED_DRIVE_PATH) if SHARED_DRIVE_PATH else _LOCAL_DIR / "trained_models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 def load_all_data() -> pd.DataFrame:

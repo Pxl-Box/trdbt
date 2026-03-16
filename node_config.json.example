@@ -1,0 +1,15 @@
+{
+    "shared_drive_path": "D:\\trd-data",
+    "network_credentials": {
+        "username": "",
+        "password": "",
+        "domain": ""
+    },
+    "data_lake": {
+        "refresh_interval_hours": 6
+    },
+    "deep_trainer": {
+        "retrain_interval_hours": 12,
+        "gpu_device": "cuda"
+    }
+}

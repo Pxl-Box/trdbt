@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -12,9 +13,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Paths
-# Configure this to point to your 30TB Shared Network Drive (e.g., r"Z:\ai_data_lake" or "/mnt/shared/ai_data_lake")
-# If left as None, it defaults to the local folder.
-SHARED_DRIVE_DIR = None
+def load_node_config():
+    root_dir = Path(__file__).parent.parent
+    config_path = root_dir / "node_config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading node_config.json: {e}")
+    return {}
+
+NODE_CONFIG = load_node_config()
+SHARED_DRIVE_DIR = NODE_CONFIG.get("shared_drive_path", r"D:\trd-data")
 
 BASE_DIR = Path(SHARED_DRIVE_DIR) if SHARED_DRIVE_DIR else Path(__file__).parent
 RAW_DATA_DIR = BASE_DIR / "raw_data"
