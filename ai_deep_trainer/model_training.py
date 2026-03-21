@@ -135,6 +135,8 @@ def train_and_export_model():
             logger.info("🚀 GPU-NATIVE SEARCH: Investigating 100 possible brain architectures...")
             
             n_iter = 100
+            patience = 20  # Stop early if no improvement in 20 tries
+            no_improvement_count = 0
             best_score = float('inf')  # minimizing logloss
             
             for i in range(n_iter):
@@ -170,9 +172,16 @@ def train_and_export_model():
                 if current_score < best_score:
                     best_score = current_score
                     best_params = params
+                    no_improvement_count = 0
                     # Store best iteration count
                     best_params['n_estimators'] = len(cv_results)
                     logger.info(f"  ✨ [NEW BEST] [Iter {i+1}/{n_iter}] Best Score: {best_score:.4f}")
+                else:
+                    no_improvement_count += 1
+                    
+                if no_improvement_count >= patience:
+                    logger.info(f"🛑 EARLY STOPPING: No improvement for {patience} iterations. Keeping the best brain.")
+                    break
             
             logger.info(f"🏆 Best Architecture Selected: {best_params}")
         else:
