@@ -70,7 +70,8 @@ def prepare_data(master_df: pd.DataFrame):
         'ret_1d', 'ret_5d', 'ret_20d',
         'dist_sma_20', 'dist_sma_50',
         'rsi_14', 'macd_hist',
-        'daily_range_pct', 'volatility_20d', 'vol_surge'
+        'daily_range_pct', 'volatility_20d', 'vol_surge',
+        'rsi_7', 'macd_trend', 'bb_width', 'atr_pct'
     ]
     
     # 1. Clean the data (Models hate NaNs and Infs)

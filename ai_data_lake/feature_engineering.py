@@ -79,13 +79,28 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
     
     # 3. Oscillators
     df['rsi_14'] = calculate_rsi(df['close'])
+    df['rsi_7'] = calculate_rsi(df['close'], period=7)
     
     macd_df = calculate_macd(df['close'])
     df = pd.concat([df, macd_df], axis=1)
+    df['macd_trend'] = (df['macd_hist'] > df['macd_hist'].shift(1)).astype(int)
     
-    # 4. Volatility (High/Low Range)
+    # 4. Volatility (High/Low Range & Bands)
     df['daily_range_pct'] = (df['high'] - df['low']) / df['close']
     df['volatility_20d'] = df['ret_1d'].rolling(window=20).std()
+    
+    std_20 = df['close'].rolling(window=20).std()
+    upper_bb = df['sma_20'] + (std_20 * 2)
+    lower_bb = df['sma_20'] - (std_20 * 2)
+    df['bb_width'] = (upper_bb - lower_bb) / df['sma_20']
+    
+    # ATR Pct
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr_14 = tr.rolling(window=14).mean()
+    df['atr_pct'] = atr_14 / df['close']
     
     # 5. Volume Features
     df['vol_sma_10'] = df['volume'].rolling(window=10).mean()

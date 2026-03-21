@@ -133,6 +133,19 @@ class MeanReversionStrategy:
                 
                 features['vol_surge'] = latest['Volume'] / avg_volume if avg_volume > 0 else 1.0
 
+                # --- Big Brain Features ---
+                try:
+                    rsi_7_series = ta.rsi(df['Close'], length=7)
+                    features['rsi_7'] = float(rsi_7_series.iloc[-1]) if rsi_7_series is not None and not rsi_7_series.empty else rsi
+                except Exception:
+                    features['rsi_7'] = rsi
+
+                macd_hist_prev = float(macd.iloc[-2, 1]) if macd is not None and len(macd) > 1 else 0
+                features['macd_trend'] = 1 if features['macd_hist'] > macd_hist_prev else 0
+                
+                features['bb_width'] = (upper_band - lower_band) / basis if basis > 0 else 0
+                features['atr_pct'] = atr / current_price if current_price else 0
+
                 # Must match exact DataFrame shape expected by the model
                 feature_df = pd.DataFrame([features])
                 
