@@ -2,7 +2,7 @@ import pickle
 import xgboost as xgb
 import os
 
-path = r"C:\Users\Conor\Documents\GitHub\trdbt\import\ai_brain_v1.pkl"
+path = r"C:\Users\Conor\Documents\GitHub\trdbt\trained_models\ai_brain_v1.pkl"
 
 print(f"Checking brain at: {path}")
 if not os.path.exists(path):
