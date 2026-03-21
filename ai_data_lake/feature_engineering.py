@@ -53,29 +53,28 @@ def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: in
         'macd_hist': macd_line - signal_line
     })
 
-def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
+def generate_base_features(df: pd.DataFrame, timeframe_label: str) -> pd.DataFrame:
     """
-    Takes raw OHLCV data and engineers dozens of technical/statistical features
-    for the Machine Learning model. Crucially, ensures NO Look-Ahead bias.
+    Generates technical indicators for a given OHLCV dataframe,
+    appending the timeframe label (e.g., '_15m' or '_1d') to every column.
     """
     if len(df) < 50:
         return pd.DataFrame() # Not enough data
         
     df = df.copy()
     
-    # 1. Price Momentum Features (Log Returns to normalize)
-    df['ret_1d'] = np.log(df['close'] / df['close'].shift(1))
-    df['ret_5d'] = np.log(df['close'] / df['close'].shift(5))
-    df['ret_20d'] = np.log(df['close'] / df['close'].shift(20))
+    # 1. Price Momentum Features
+    # Since intervals are different, "1d" means 1 candle.
+    df['ret_1_bar'] = np.log(df['close'] / df['close'].shift(1))
+    df['ret_5_bar'] = np.log(df['close'] / df['close'].shift(5))
+    df['ret_20_bar'] = np.log(df['close'] / df['close'].shift(20))
     
     # 2. Moving Averages & Distances
-    df['sma_20'] = df['close'].rolling(window=20).mean()
-    df['sma_50'] = df['close'].rolling(window=50).mean()
-    df['sma_200'] = df['close'].rolling(window=200).mean()
+    sma_20 = df['close'].rolling(window=20).mean()
+    sma_50 = df['close'].rolling(window=50).mean()
     
-    # Distance from Moving Averages (stationary features are better for ML)
-    df['dist_sma_20'] = (df['close'] - df['sma_20']) / df['sma_20']
-    df['dist_sma_50'] = (df['close'] - df['sma_50']) / df['sma_50']
+    df['dist_sma_20'] = (df['close'] - sma_20) / sma_20
+    df['dist_sma_50'] = (df['close'] - sma_50) / sma_50
     
     # 3. Oscillators
     df['rsi_14'] = calculate_rsi(df['close'])
@@ -86,71 +85,127 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
     df['macd_trend'] = (df['macd_hist'] > df['macd_hist'].shift(1)).astype(int)
     
     # 4. Volatility (High/Low Range & Bands)
-    df['daily_range_pct'] = (df['high'] - df['low']) / df['close']
-    df['volatility_20d'] = df['ret_1d'].rolling(window=20).std()
+    df['bar_range_pct'] = (df['high'] - df['low']) / df['close']
+    df['volatility_20'] = df['ret_1_bar'].rolling(window=20).std()
     
     std_20 = df['close'].rolling(window=20).std()
-    upper_bb = df['sma_20'] + (std_20 * 2)
-    lower_bb = df['sma_20'] - (std_20 * 2)
-    df['bb_width'] = (upper_bb - lower_bb) / df['sma_20']
+    upper_bb = sma_20 + (std_20 * 2)
+    lower_bb = sma_20 - (std_20 * 2)
+    df['bb_width'] = (upper_bb - lower_bb) / sma_20
     
     # ATR Pct
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    atr_14 = tr.rolling(window=14).mean()
-    df['atr_pct'] = atr_14 / df['close']
+    atr = tr.rolling(window=14).mean()
+    df['atr_pct'] = atr / df['close']
     
     # 5. Volume Features
-    df['vol_sma_10'] = df['volume'].rolling(window=10).mean()
-    df['vol_surge'] = df['volume'] / df['vol_sma_10']
+    vol_sma_10 = df['volume'].rolling(window=10).mean()
+    df['vol_surge'] = df['volume'] / vol_sma_10
     
-    # --- The Target Label (What we want to predict) ---
-    # Example: Will the price be 3% higher 5 days from now?
-    # THIS IS THE ONLY PLACE WE USE .shift(-N) (Looking into the future).
-    # We must explicitly drop this column before feeding it to the AI during live inference!
-    future_return = (df['close'].shift(-5) - df['close']) / df['close']
-    df['target_win_5d'] = (future_return > 0.03).astype(int) # 1 if >3% profit, else 0
+    # Drop original OHLCV columns -- we don't want absolute prices fed to the ML model!
+    feats = df.drop(columns=['open', 'high', 'low', 'close', 'volume', 'adj_close'], errors='ignore')
     
-    # Drop rows with NaN values created by rolling windows or forward shifts
-    df.dropna(inplace=True)
+    # Rename all columns with the timeframe suffix
+    feats.columns = [f"{c}_{timeframe_label}" for c in feats.columns]
     
-    return df
+    return feats
+
+def process_and_stitch_ticker(ticker: str):
+    """
+    Loads both the 15m and 1d raw data for a ticker.
+    Calculates features for both timeframes.
+    Shifts the 1d features to prevent look-ahead bias.
+    Merges them using merge_asof.
+    """
+    file_1d = RAW_DATA_DIR / f"{ticker}_raw_1d.parquet"
+    file_15m = RAW_DATA_DIR / f"{ticker}_raw_15m.parquet"
+    
+    if not file_1d.exists() or not file_15m.exists():
+        logger.warning(f"[{ticker}] Missing one or both timeframes. Skipping.")
+        return False
+        
+    try:
+        df_1d = pd.read_parquet(file_1d).sort_index()
+        df_15m = pd.read_parquet(file_15m).sort_index()
+        
+        feats_1d = generate_base_features(df_1d, "1d")
+        feats_15m = generate_base_features(df_15m, "15m")
+        
+        if feats_1d.empty or feats_15m.empty:
+            logger.warning(f"[{ticker}] Insufficient data for feature generation.")
+            return False
+            
+        # CRITICAL: Prevent Look-Ahead Bias on the Daily Data.
+        # Yahoo Finance marks daily candles at midnight.
+        # We only know the true Close price at the END of that day.
+        # So we MUST shift the daily features forward by 1 trading day!
+        feats_1d = feats_1d.shift(1)
+        feats_1d.dropna(inplace=True)
+        
+        # We need timezone matching for merge_asof
+        if df_15m.index.tzinfo != feats_1d.index.tzinfo:
+            logger.warning(f"[{ticker}] Tzinfo mismatch. Aligning prior to stitch.")
+            if df_15m.index.tz is None:
+                df_15m.index = df_15m.index.tz_localize('UTC')
+            if feats_1d.index.tz is None:
+                feats_1d.index = feats_1d.index.tz_localize('UTC')
+                
+        # Merge: For every 15m row, find the most recent 1d row (looking backward)
+        stitched = pd.merge_asof(
+            feats_15m, 
+            feats_1d, 
+            left_index=True, 
+            right_index=True, 
+            direction='backward'
+        )
+        
+        # RE-ATTACH THE TARGET LABEL
+        # The AI needs to predict 15m returns.
+        # Target: Is the profit > 1% within the next 26 candles (1 full day)?
+        future_return = (df_15m['close'].shift(-26) - df_15m['close']) / df_15m['close']
+        stitched['target_win'] = (future_return > 0.01).astype(int)
+        
+        # Cleanup
+        stitched.dropna(inplace=True)
+        
+        if stitched.empty:
+            logger.warning(f"[{ticker}] Stitched dataframe is empty.")
+            return False
+            
+        output_file = PROCESSED_DATA_DIR / f"{ticker}_features.parquet"
+        stitched.to_parquet(output_file, engine='pyarrow')
+        return True
+        
+    except Exception as e:
+        logger.error(f"[{ticker}] Error stitching data: {e}", exc_info=True)
+        return False
 
 def process_all_files():
-    """Iterates through raw_data, calculates features, and saves to processed_data"""
-    logger.info("=== Starting Data Lake Feature Engineering ===")
+    """Finds all unique tickers in raw_data and stitches their timeframes."""
+    logger.info("=== Starting Data Lake MTF Feature Stitching ===")
     
     if not RAW_DATA_DIR.exists():
         logger.error(f"Raw data directory not found at {RAW_DATA_DIR}")
         return
         
     raw_files = list(RAW_DATA_DIR.glob("*.parquet"))
-    logger.info(f"Found {len(raw_files)} raw data files.")
+    tickers = set()
+    for f in raw_files:
+        parts = f.stem.split("_raw_")
+        if len(parts) == 2:
+            tickers.add(parts[0])
+            
+    logger.info(f"Found {len(tickers)} unique tickers for MTF processing.")
     
     success_count = 0
-    for file_path in raw_files:
-        try:
-            df = pd.read_parquet(file_path)
+    for ticker in tickers:
+        if process_and_stitch_ticker(ticker):
+            success_count += 1
             
-            # Ensure index is sorted chronologically
-            df.sort_index(inplace=True)
-            
-            features_df = calculate_features(df)
-            
-            if not features_df.empty:
-                output_file = PROCESSED_DATA_DIR / f"{file_path.stem}_features.parquet"
-                features_df.to_parquet(output_file, engine='pyarrow')
-                success_count += 1
-                logger.debug(f"Process [{file_path.name}]: {len(features_df)} ML-ready rows.")
-            else:
-                logger.warning(f"[{file_path.name}] Insufficient data for feature engineering.")
-                
-        except Exception as e:
-            logger.error(f"Error processing {file_path.name}: {e}")
-            
-    logger.info(f"=== Feature Engineering Complete. Processed {success_count}/{len(raw_files)} files. ===")
+    logger.info(f"=== MTF Feature Engineering Complete. Stitched {success_count}/{len(tickers)} tickers. ===")
 
 if __name__ == "__main__":
     process_all_files()

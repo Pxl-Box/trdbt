@@ -125,15 +125,22 @@ def main():
         logger.error("No tickers to process. Exiting.")
         return
         
-    logger.info(f"Found {len(tickers)} tickers to process.")
+    logger.info(f"Found {len(tickers)} tickers to process for MTF (Daily + 15m).")
     
     success_count = 0
     for ticker in tickers:
-        success = download_ticker_history(ticker, period="10y", interval="1d")
-        if success:
+        logger.info(f"--- Fetching Macro (1d) and Micro (15m) for {ticker} ---")
+        
+        # Macro (Daily): 2 years is enough for macro trend context
+        success_1d = download_ticker_history(ticker, period="2y", interval="1d")
+        
+        # Micro (15m): Yahoo Finance free tier limit is 60 days for 15m data
+        success_15m = download_ticker_history(ticker, period="60d", interval="15m")
+        
+        if success_1d and success_15m:
             success_count += 1
             
-    logger.info(f"=== Ingestion Complete. Successfully downloaded {success_count}/{len(tickers)} tickers. ===")
+    logger.info(f"=== Ingestion Complete. Successfully downloaded MTF data for {success_count}/{len(tickers)} tickers. ===")
 
 if __name__ == "__main__":
     main()

@@ -66,19 +66,31 @@ def load_all_data() -> pd.DataFrame:
 def prepare_data(master_df: pd.DataFrame):
     """Separates Features (X) from Target Labels (y)."""
     # Define features we want the model to learn from (Exclude raw price/volume)
-    feature_cols = [
-        'ret_1d', 'ret_5d', 'ret_20d',
+    base_features = [
+        'ret_1_bar', 'ret_5_bar', 'ret_20_bar',
         'dist_sma_20', 'dist_sma_50',
-        'rsi_14', 'macd_hist',
-        'daily_range_pct', 'volatility_20d', 'vol_surge',
-        'rsi_7', 'macd_trend', 'bb_width', 'atr_pct'
+        'rsi_14', 'rsi_7',
+        'macd', 'macd_signal', 'macd_hist', 'macd_trend',
+        'bar_range_pct', 'volatility_20',
+        'bb_width', 'atr_pct', 'vol_surge'
     ]
     
-    # 1. Clean the data (Models hate NaNs and Infs)
-    master_df = master_df.replace([np.inf, -np.inf], np.nan).dropna(subset=feature_cols + ['target_win_5d'])
+    # We dynamically build the column list for both timeframes
+    feature_cols = [f"{f}_15m" for f in base_features] + [f"{f}_1d" for f in base_features]
+    target_col = 'target_win'
     
-    X = master_df[feature_cols]
-    y = master_df['target_win_5d']
+    # 1. Clean the data (Models hate NaNs and Infs)
+    # Ensure all required columns exist in the dataframe before replacing/dropping
+    valid_feature_cols = [c for c in feature_cols if c in master_df.columns]
+    
+    if target_col not in master_df.columns:
+        logger.error(f"Target column '{target_col}' missing from data!")
+        return pd.DataFrame(), pd.Series()
+        
+    master_df = master_df.replace([np.inf, -np.inf], np.nan).dropna(subset=valid_feature_cols + [target_col])
+    
+    X = master_df[valid_feature_cols]
+    y = master_df[target_col]
     
     return X, y
 

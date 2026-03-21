@@ -38,14 +38,71 @@ class MeanReversionStrategy:
             logger.error(f"Failed to fetch data for {ticker}: {e}")
             return pd.DataFrame()
 
+    def _generate_ml_features(self, df: pd.DataFrame, timeframe_label: str) -> pd.DataFrame:
+        if len(df) < 50:
+            return pd.DataFrame()
+        df = df.copy()
+        
+        # 1. Price Momentum
+        df['ret_1_bar'] = np.log(df['Close'] / df['Close'].shift(1))
+        df['ret_5_bar'] = np.log(df['Close'] / df['Close'].shift(5))
+        df['ret_20_bar'] = np.log(df['Close'] / df['Close'].shift(20))
+        
+        # 2. Moving Averages & Distances
+        sma_20 = df['Close'].rolling(window=20).mean()
+        sma_50 = df['Close'].rolling(window=50).mean()
+        df['dist_sma_20'] = (df['Close'] - sma_20) / sma_20
+        df['dist_sma_50'] = (df['Close'] - sma_50) / sma_50
+        
+        # 3. Oscillators
+        df['rsi_14'] = ta.rsi(df['Close'], length=14)
+        df['rsi_7'] = ta.rsi(df['Close'], length=7)
+        
+        macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+        if macd is not None and not macd.empty:
+            df['macd'] = macd.iloc[:, 0]
+            df['macd_hist'] = macd.iloc[:, 1]
+            df['macd_signal'] = macd.iloc[:, 2]
+            df['macd_trend'] = (df['macd_hist'] > df['macd_hist'].shift(1)).astype(int)
+        else:
+            df['macd'] = df['macd_hist'] = df['macd_signal'] = df['macd_trend'] = 0
+            
+        # 4. Volatility
+        df['bar_range_pct'] = (df['High'] - df['Low']) / df['Close']
+        df['volatility_20'] = df['ret_1_bar'].rolling(window=20).std()
+        
+        std_20 = df['Close'].rolling(window=20).std()
+        upper_bb = sma_20 + (std_20 * 2)
+        lower_bb = sma_20 - (std_20 * 2)
+        df['bb_width'] = (upper_bb - lower_bb) / sma_20
+        
+        atr = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+        df['atr_pct'] = atr / df['Close']
+        
+        # 5. Volume
+        if 'Volume' in df.columns:
+            vol_sma_10 = df['Volume'].rolling(window=10).mean()
+            df['vol_surge'] = df['Volume'] / vol_sma_10
+        else:
+            df['vol_surge'] = 1.0
+
+        feats = df[['ret_1_bar', 'ret_5_bar', 'ret_20_bar', 'dist_sma_20', 'dist_sma_50', 
+                    'rsi_14', 'rsi_7', 'macd', 'macd_signal', 'macd_hist', 'macd_trend', 
+                    'bar_range_pct', 'volatility_20', 'bb_width', 'atr_pct', 'vol_surge']].copy()
+                    
+        feats.columns = [f"{c}_{timeframe_label}" for c in feats.columns]
+        return feats
+
     def analyze(self, ticker: str, quant_engine=None) -> dict:
         """
         Calculates indicators and returns a dictionary with current signals.
-        If a quant_engine is provided containing an ML model, features are engineered
+        If a quant_engine is provided containing an ML model, MTF features are engineered
         and an AI probability score is attached.
         """
-        df = self.get_historical_data(ticker, interval="1d", period="3mo") # Need 1d for ML features, at least 60 days
-        if df.empty or len(df) < 50:
+        df_1d = self.get_historical_data(ticker, interval="1d", period="4mo")
+        df = self.get_historical_data(ticker, interval="15m", period="10d")
+        
+        if df.empty or len(df) < 50 or df_1d.empty or len(df_1d) < 50:
             return {"signal": "NEUTRAL", "reason": "Not enough data"}
 
         # Calculate Indicators using pandas_ta
@@ -112,44 +169,20 @@ class MeanReversionStrategy:
         ai_win_prob = 0.50
         if quant_engine and quant_engine.is_ai_active():
             try:
-                # Calculate required ML features for the very last row
-                features = {}
-                features['ret_1d'] = np.log(current_price / df['Close'].iloc[-2]) if len(df)>1 else 0
-                features['ret_5d'] = np.log(current_price / df['Close'].iloc[-6]) if len(df)>5 else 0
-                features['ret_20d'] = np.log(current_price / df['Close'].iloc[-21]) if len(df)>20 else 0
+                feats_15m = self._generate_ml_features(df, "15m")
+                feats_1d = self._generate_ml_features(df_1d, "1d")
                 
-                sma20 = df['Close'].rolling(20).mean().iloc[-1]
-                sma50 = df['Close'].rolling(50).mean().iloc[-1]
-                features['dist_sma_20'] = (current_price - sma20) / sma20 if sma20 else 0
-                features['dist_sma_50'] = (current_price - sma50) / sma50 if sma50 else 0
+                # Get the absolute most recent 15m features
+                latest_15m = feats_15m.iloc[-1:].copy()
                 
-                features['rsi_14'] = rsi
-                macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
-                features['macd_hist'] = float(macd.iloc[-1, 1]) if macd is not None and not macd.empty else 0
+                # CRITICAL: To prevent lookahead bias (and match the Data Lake training),
+                # we must use "yesterday's" completed daily candle as our macro context.
+                latest_1d = feats_1d.iloc[-2:-1].copy()
                 
-                features['daily_range_pct'] = (latest['High'] - latest['Low']) / current_price
-                log_ret = np.log(df['Close'] / df['Close'].shift(1))
-                features['volatility_20d'] = log_ret.rolling(20).std().iloc[-1]
+                latest_15m.reset_index(drop=True, inplace=True)
+                latest_1d.reset_index(drop=True, inplace=True)
                 
-                features['vol_surge'] = latest['Volume'] / avg_volume if avg_volume > 0 else 1.0
-
-                # --- Big Brain Features ---
-                try:
-                    rsi_7_series = ta.rsi(df['Close'], length=7)
-                    features['rsi_7'] = float(rsi_7_series.iloc[-1]) if rsi_7_series is not None and not rsi_7_series.empty else rsi
-                except Exception:
-                    features['rsi_7'] = rsi
-
-                macd_hist_prev = float(macd.iloc[-2, 1]) if macd is not None and len(macd) > 1 else 0
-                features['macd_trend'] = 1 if features['macd_hist'] > macd_hist_prev else 0
-                
-                features['bb_width'] = (upper_band - lower_band) / basis if basis > 0 else 0
-                features['atr_pct'] = atr / current_price if current_price else 0
-
-                # Must match exact DataFrame shape expected by the model
-                feature_df = pd.DataFrame([features])
-                
-                # Drop NaNs by filling with 0 (safe fallback)
+                feature_df = pd.concat([latest_15m, latest_1d], axis=1)
                 feature_df.fillna(0, inplace=True)
                 
                 ai_win_prob = quant_engine.get_win_probability(feature_df)
