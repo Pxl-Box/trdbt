@@ -101,12 +101,18 @@ def generate_base_features(df: pd.DataFrame, timeframe_label: str) -> pd.DataFra
     atr = tr.rolling(window=14).mean()
     df['atr_pct'] = atr / df['close']
     
-    # 5. Volume Features
+    # Volume Features
     vol_sma_10 = df['volume'].rolling(window=10).mean()
     df['vol_surge'] = df['volume'] / vol_sma_10
     
-    # Drop original OHLCV columns -- we don't want absolute prices fed to the ML model!
-    feats = df.drop(columns=['open', 'high', 'low', 'close', 'volume', 'adj_close'], errors='ignore')
+    # STRICT FEATURE SELECTION (Indicators only, drop OHLCV and metadata)
+    feature_cols = [
+        'ret_1_bar', 'ret_5_bar', 'ret_20_bar', 'dist_sma_20', 'dist_sma_50',
+        'rsi_14', 'rsi_7', 'macd', 'macd_signal', 'macd_hist', 'macd_trend',
+        'bar_range_pct', 'volatility_20', 'bb_width', 'atr_pct', 'vol_surge'
+    ]
+    
+    feats = df[feature_cols].copy()
     
     # Rename all columns with the timeframe suffix
     feats.columns = [f"{c}_{timeframe_label}" for c in feats.columns]

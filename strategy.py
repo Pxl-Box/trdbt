@@ -38,7 +38,7 @@ class MeanReversionStrategy:
             logger.error(f"Failed to fetch data for {ticker}: {e}")
             return pd.DataFrame()
 
-    def _generate_ml_features(self, df: pd.DataFrame, timeframe_label: str) -> pd.DataFrame:
+    def _generate_ml_features(self, df: pd.DataFrame, timeframe_label: str, benchmark_rets: dict = None) -> pd.DataFrame:
         if len(df) < 50:
             return pd.DataFrame()
         df = df.copy()
@@ -86,10 +86,20 @@ class MeanReversionStrategy:
         else:
             df['vol_surge'] = 1.0
 
-        feats = df[['ret_1_bar', 'ret_5_bar', 'ret_20_bar', 'dist_sma_20', 'dist_sma_50', 
-                    'rsi_14', 'rsi_7', 'macd', 'macd_signal', 'macd_hist', 'macd_trend', 
-                    'bar_range_pct', 'volatility_20', 'bb_width', 'atr_pct', 'vol_surge']].copy()
-                    
+        # Phase 4 SRS Calculation
+        df['ret_vs_spy'] = df['ret_1_bar'] - benchmark_rets.get('SPY', df['ret_1_bar']) if benchmark_rets else 0.0
+        df['ret_vs_qqq'] = df['ret_1_bar'] - benchmark_rets.get('QQQ', df['ret_1_bar']) if benchmark_rets else 0.0
+        df['ret_vs_iwm'] = df['ret_1_bar'] - benchmark_rets.get('IWM', df['ret_1_bar']) if benchmark_rets else 0.0
+
+        # STRICT COLUMN LIST (Must match brain's training features exactly)
+        feature_order = [
+            'ret_1_bar', 'ret_5_bar', 'ret_20_bar', 'dist_sma_20', 'dist_sma_50',
+            'rsi_14', 'rsi_7', 'macd', 'macd_signal', 'macd_hist', 'macd_trend',
+            'bar_range_pct', 'volatility_20', 'bb_width', 'atr_pct', 'vol_surge',
+            'ret_vs_spy', 'ret_vs_qqq', 'ret_vs_iwm'
+        ]
+        
+        feats = df[feature_order].copy()
         feats.columns = [f"{c}_{timeframe_label}" for c in feats.columns]
         return feats
 
@@ -169,61 +179,43 @@ class MeanReversionStrategy:
         ai_win_prob = 0.50
         if quant_engine and quant_engine.is_ai_active():
             try:
-                feats_15m = self._generate_ml_features(df, "15m")
-                feats_1d = self._generate_ml_features(df_1d, "1d")
+                # ── Live Sector-Relative Strength (SRS) ──────────────────
+                # Fetch benchmark returns — these are the same features the
+                # Data Lake stitches into the training data (Phase 4).
+                benchmarks = {"SPY": 0.0, "QQQ": 0.0, "IWM": 0.0}
+                for bm in benchmarks:
+                    try:
+                        bm_df = self.get_historical_data(bm, interval="1d", period="5d")
+                        if not bm_df.empty and len(bm_df) >= 2:
+                            benchmarks[bm] = float(np.log(bm_df["Close"].iloc[-1] / bm_df["Close"].iloc[-2]))
+                    except Exception:
+                        pass # Keep 0.0 if fetch fails
+
+                # Generate features using the STRICT 38-feature order
+                feats_15m = self._generate_ml_features(df, "15m", benchmark_rets=benchmarks)
+                feats_1d = self._generate_ml_features(df_1d, "1d", benchmark_rets=benchmarks)
                 
+                if feats_15m.empty or feats_1d.empty:
+                    raise ValueError("Empty features generated")
+
                 # Get the absolute most recent 15m features
                 latest_15m = feats_15m.iloc[-1:].copy()
                 
-                # CRITICAL: To prevent lookahead bias (and match the Data Lake training),
-                # we must use "yesterday's" completed daily candle as our macro context.
+                # CRITICAL: To prevent lookahead bias, we use "yesterday's" completed daily candle
                 latest_1d = feats_1d.iloc[-2:-1].copy()
                 
                 latest_15m.reset_index(drop=True, inplace=True)
                 latest_1d.reset_index(drop=True, inplace=True)
                 
                 feature_df = pd.concat([latest_15m, latest_1d], axis=1)
-
-                # ── Live Sector-Relative Strength (SRS) ──────────────────
-                # Fetch benchmark returns — these are the same features the
-                # Data Lake stitches into the training data (Phase 4).
-                try:
-                    benchmarks = {"SPY": 0.0, "QQQ": 0.0, "IWM": 0.0}
-                    for bm in benchmarks:
-                        bm_df = self.get_historical_data(bm, interval="1d", period="5d")
-                        if not bm_df.empty and len(bm_df) >= 2:
-                            benchmarks[bm] = float(
-                                np.log(bm_df["Close"].iloc[-1] / bm_df["Close"].iloc[-2])
-                            )
-
-                    # Ticker's own 1-day return (vs the completed daily close)
-                    ticker_ret_1d = float(
-                        np.log(df_1d["Close"].iloc[-1] / df_1d["Close"].iloc[-2])
-                    ) if len(df_1d) >= 2 else 0.0
-
-                    # Ticker's own 15m (latest bar) return
-                    ticker_ret_15m = float(
-                        np.log(df["Close"].iloc[-1] / df["Close"].iloc[-2])
-                    ) if len(df) >= 2 else 0.0
-
-                    feature_df["ret_vs_spy_1d"]  = ticker_ret_1d  - benchmarks["SPY"]
-                    feature_df["ret_vs_qqq_1d"]  = ticker_ret_1d  - benchmarks["QQQ"]
-                    feature_df["ret_vs_iwm_1d"]  = ticker_ret_1d  - benchmarks["IWM"]
-                    feature_df["ret_vs_spy_15m"] = ticker_ret_15m - benchmarks["SPY"]
-                    feature_df["ret_vs_qqq_15m"] = ticker_ret_15m - benchmarks["QQQ"]
-                    feature_df["ret_vs_iwm_15m"] = ticker_ret_15m - benchmarks["IWM"]
-                    
-                    srs_spy = feature_df["ret_vs_spy_1d"].iloc[0]
-                    diag += f" [SRS vs SPY: {srs_spy:+.4f}]"
-                except Exception as srs_err:
-                    logger.warning(f"[{ticker}] SRS calculation failed: {srs_err}")
-
                 feature_df.fillna(0, inplace=True)
                 
                 ai_win_prob = quant_engine.get_win_probability(feature_df)
-                diag += f" [AI Prob: {ai_win_prob*100:.1f}%]"
+                
+                srs_spy = feature_df["ret_vs_spy_1d"].iloc[0]
+                diag += f" [SRS vs SPY: {srs_spy:+.4f}] [AI Prob: {ai_win_prob*100:.1f}%]"
             except Exception as e:
-                logger.warning(f"[{ticker}] AI Inference feature generation failed: {e}")
+                logger.warning(f"[{ticker}] AI Inference failed: {e}")
 
 
         # ── Entry Logic ───────────────────────────────────────────────────────
