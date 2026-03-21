@@ -1,0 +1,59 @@
+@echo off
+TITLE TRDBT - AI Brain Upgrade Pipeline
+COLOR 0A
+
+echo =======================================================
+echo    TRDBT: PHASE 4 ULTIMATE BRAIN UPGRADE
+echo =======================================================
+echo.
+
+:: 1. Sync Latest Code
+echo [STEP 1/4] Pulling latest Phase 4 logic from GitHub...
+git pull origin main
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Git pull failed. Check your internet connection.
+    pause
+    exit /b
+)
+
+:: 2. Data Ingestion (Macro + Micro + Benchmarks)
+echo.
+echo [STEP 2/4] Running Data Lake Ingestion (Downloading SPY, QQQ, IWM + Tickers)...
+python ai_data_lake/data_ingestion.py
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Data Ingestion failed.
+    pause
+    exit /b
+)
+
+:: 3. Feature Engineering (The Stitching Engine)
+echo.
+echo [STEP 3/4] Running Feature Engineering (Stitching MTF + Relative Strength)...
+python ai_data_lake/feature_engineering.py
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Feature Engineering failed.
+    pause
+    exit /b
+)
+
+:: 4. Deep Trainer (GPU-Native Learning)
+echo.
+echo [STEP 4/4] Starting Deep Trainer (3080 Ti Mode)...
+echo [INFO] Looking for approx 0.13 LogLoss or better.
+python ai_deep_trainer/model_training.py
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Deep Trainer failed.
+    pause
+    exit /b
+)
+
+echo.
+echo =======================================================
+echo    BRAIN UPGRADE COMPLETE! 🦾🔥
+echo.
+echo    Next Steps:
+echo    1. Verify the ai_brain_v1.pkl looks fresh.
+echo    2. Commit and push the .pkl to GitHub manually.
+echo    3. Restart your bot on the LXC to load the new brain.
+echo =======================================================
+pause
