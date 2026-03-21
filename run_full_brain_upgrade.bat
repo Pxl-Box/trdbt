@@ -31,7 +31,7 @@ echo.
 ::    Without this, old broken files mix with new ones and wipe all rows in the trainer.
 echo.
 echo [STEP 3a/4] Clearing stale processed_data files...
-python -c "from pathlib import Path; import json; try: d = Path(json.load(open('node_config.json')).get('shared_drive_path', r'D:\trd-data')) / 'processed_data'; [f.unlink() for f in d.glob('*.parquet')] if d.exists() else None; print(f'Cleared stale files from {d}') except Exception as e: print(f'Skip clear: {e}')"
+python scripts/cleanup_data.py
 
 :: 4. Feature Engineering (The Stitching Engine)
 echo.

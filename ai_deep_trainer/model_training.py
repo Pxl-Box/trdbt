@@ -78,7 +78,14 @@ def prepare_data(master_df: pd.DataFrame):
         logger.error(f"Target column '{target_col}' missing from data!")
         return pd.DataFrame(), pd.Series()
         
-    master_df = master_df.replace([np.inf, -np.inf], np.nan).dropna(subset=valid_feature_cols + [target_col])
+    master_df = master_df.replace([np.inf, -np.inf], np.nan)
+    
+    # Fill missing features with 0 (neutral) instead of dropping rows
+    # This prevents column mismatches from nuking the dataset
+    master_df[valid_feature_cols] = master_df[valid_feature_cols].fillna(0)
+    
+    # Only drop if the target itself is missing
+    master_df = master_df.dropna(subset=[target_col])
     
     X = master_df[valid_feature_cols]
     y = master_df[target_col]
