@@ -922,6 +922,12 @@ class TradingBot:
             logger.info(f"Analyzing {ticker}...")
             try:
                 signal_data = self.strategy.analyze(ticker, quant_engine=getattr(self, 'quant_engine', None))
+                
+                # [AI Visibility] Log the win probability for the user dashboard
+                ai_prob = signal_data.get('ai_win_prob')
+                ai_log = f" [AI: {ai_prob:.4f}]" if ai_prob is not None else " [AI: OFF]"
+                logger.info(f"[{ticker}] Analysis complete.{ai_log}")
+                
                 # Reset error count on success
                 health["error_count"] = 0
                 health["is_paused"] = False

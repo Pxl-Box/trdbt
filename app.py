@@ -669,13 +669,19 @@ status_color = {"RUNNING": "🟢", "PAUSED": "🟡", "LOCKED": "🔴"}.get(
 )
 
 # AI Status determination
-ai_status = "🔴 AI OFF"
-if config.get("quant_sizing_enabled", False):
-    engine = get_ai_engine(config.get("ml_model_path", "trained_models/ai_brain_v1.pkl"))
-    if engine and engine.is_ai_active():
-        ai_status = "🤖 AI ACTIVE"
-    else:
-        ai_status = "⚠️ AI ERROR"
+ai_ready = False
+engine = get_ai_engine(config.get("ml_model_path", "trained_models/ai_brain_v1.pkl"))
+if engine and engine.is_ai_active():
+    ai_ready = True
+
+kelly_enabled = config.get("quant_sizing_enabled", False)
+
+if ai_ready and kelly_enabled:
+    ai_status = "🤖 AI ACTIVE"
+elif ai_ready:
+    ai_status = "🤖 AI READY"
+else:
+    ai_status = "🔴 AI OFF"
 
 st.markdown(
     f"## T212 Algo Dashboard &nbsp;&nbsp; {status_color} `{config.get('bot_status','UNKNOWN')}` "
