@@ -347,6 +347,20 @@ def show_settings():
         preset_idx  = preset_options.index(cur_preset) if cur_preset in preset_options else len(preset_options) - 1
         preset_mode = st.selectbox("Preset", preset_options, index=preset_idx)
 
+        # Initialize all potential variables with current config values as defaults
+        bb_len  = int(config.get("bb_length",     20))
+        bb_std  = float(config.get("bb_std",      2.0))
+        rsi_len = int(config.get("rsi_length",    14))
+        rsi_thr = int(config.get("rsi_threshold", 30))
+        rsi_w   = float(config.get("rsi_score_weight", 0.6))
+        bb_w    = float(config.get("bb_score_weight",  0.4))
+        tier1   = float(config.get("trailing_sl_tier1_atr", 1.5))
+        tier2   = float(config.get("trailing_sl_tier2_atr", 3.0))
+        new_regime_enabled = bool(config.get("smart_regime_enabled", False))
+        new_tp_mode        = config.get("tp_target_mode", "Fixed: Mean (Middle BB)")
+        new_quant_sizing   = bool(config.get("quant_sizing_enabled", False))
+        new_quant_path     = config.get("ml_model_path", "trained_models/ai_brain_v1.pkl")
+
         if preset_mode in PRESET_PROFILES:
             p = PRESET_PROFILES[preset_mode]
             # Show preview metrics
@@ -363,7 +377,8 @@ def show_settings():
             r1, r2 = st.columns(2)
             r1.info(f"🧭 Regime Filter: {'ON' if p['smart_regime_enabled'] else 'OFF'}")
             r2.info(f"🎯 TP Mode: {p['tp_target_mode']}")
-            # Expose editable fields (disabled preview for preset values)
+            
+            # Use preset values for the save payload
             bb_len  = p["bb_length"];   bb_std  = p["bb_std"]
             rsi_len = p["rsi_length"];  rsi_thr = p["rsi_threshold"]
             rsi_w   = p["rsi_score_weight"]; bb_w = p["bb_score_weight"]
@@ -373,35 +388,34 @@ def show_settings():
         else:
             # Manual Custom — show all sliders/inputs
             pc = st.columns(4)
-            bb_len  = pc[0].number_input("BB Length",          value=int(config.get("bb_length",     20)))
-            bb_std  = pc[1].number_input("BB StdDev",          value=float(config.get("bb_std",       2.0)), step=0.1)
-            rsi_len = pc[2].number_input("RSI Length",         value=int(config.get("rsi_length",    14)))
-            rsi_thr = pc[3].number_input("RSI Buy Threshold",  value=int(config.get("rsi_threshold", 30)))
+            bb_len  = pc[0].number_input("BB Length",          value=bb_len)
+            bb_std  = pc[1].number_input("BB StdDev",          value=bb_std, step=0.1)
+            rsi_len = pc[2].number_input("RSI Length",         value=rsi_len)
+            rsi_thr = pc[3].number_input("RSI Buy Threshold",  value=rsi_thr)
 
             st.markdown("---")
             st.subheader("Signal Scoring Weights")
             w1, w2 = st.columns(2)
-            rsi_w = w1.slider("RSI Weight", 0.0, 1.0, float(config.get("rsi_score_weight", 0.6)), step=0.05)
-            bb_w  = w2.slider("BB Weight",  0.0, 1.0, float(config.get("bb_score_weight",  0.4)), step=0.05)
+            rsi_w = w1.slider("RSI Weight", 0.0, 1.0, rsi_w, step=0.05)
+            bb_w  = w2.slider("BB Weight",  0.0, 1.0, bb_w, step=0.05)
             if abs((rsi_w + bb_w) - 1.0) > 0.01:
                 st.warning(f"Weights sum to {rsi_w + bb_w:.2f} — should be 1.0.")
 
             st.subheader("Trailing Stop Tiers")
             t1c, t2c = st.columns(2)
-            tier1 = t1c.number_input("Tier 1 ATR (break-even)", value=float(config.get("trailing_sl_tier1_atr", 1.5)), step=0.1)
-            tier2 = t2c.number_input("Tier 2 ATR (lock profit)", value=float(config.get("trailing_sl_tier2_atr", 3.0)), step=0.1)
+            tier1 = t1c.number_input("Tier 1 ATR (break-even)", value=tier1, step=0.1)
+            tier2 = t2c.number_input("Tier 2 ATR (lock profit)", value=tier2, step=0.1)
 
             st.markdown("---")
             st.subheader("🧭 Regime Switching & TP Optimisation")
             new_regime_enabled = st.toggle(
                 "Smart Regime Filter (block buys when stock is in a downtrend)",
-                value=bool(config.get("smart_regime_enabled", False))
+                value=new_regime_enabled
             )
             tp_modes = ["Dynamic (Auto-Switch)", "Fixed: Mean (Middle BB)", "Fixed: Upper Band"]
-            cur_tp_mode = config.get("tp_target_mode", "Fixed: Mean (Middle BB)")
             new_tp_mode = st.selectbox(
                 "Take Profit Target", tp_modes,
-                index=tp_modes.index(cur_tp_mode) if cur_tp_mode in tp_modes else 1
+                index=tp_modes.index(new_tp_mode) if new_tp_mode in tp_modes else 1
             )
             st.caption("Dynamic — targets Upper Band in bullish regime, Middle Band in bearish. Upper Band — always targets max profit. Mean — safe/conservative.")
 
@@ -409,13 +423,13 @@ def show_settings():
             st.subheader("🤖 AI Inference & Quant Sizing")
             new_quant_sizing = st.toggle(
                 "Enable Kelly Criterion Sizing (Tri-Node Architecture)",
-                value=bool(config.get("quant_sizing_enabled", False))
+                value=new_quant_sizing
             )
             st.caption("When enabled, the bot bypasses the static Risk/Trade % and dynamically calculates optimal bet size using the Kelly Criterion formula based on Win Probability and TP/SL setup. Requires `quant_inference.py` output.")
             
             new_quant_path = st.text_input(
                 "AI Model Local Path (.pkl file)",
-                value=config.get("ml_model_path", "trained_models/ai_brain_v1.pkl"),
+                value=new_quant_path,
                 help="The path to the .pkl model on this local machine."
             )
 
