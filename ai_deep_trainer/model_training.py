@@ -151,12 +151,16 @@ def train_and_export_model():
                 )
                 
                 current_score = cv_results['test-logloss-mean'].min()
+                
+                # Heartbeat logging: log every iteration so user knows progress
+                logger.info(f"  [Iter {i+1}/{n_iter}] Current Score: {current_score:.4f} (Best: {best_score:.4f})")
+                
                 if current_score < best_score:
                     best_score = current_score
                     best_params = params
                     # Store best iteration count
                     best_params['n_estimators'] = len(cv_results)
-                    logger.info(f"  [Iter {i+1}/{n_iter}] New Best Score: {best_score:.4f}")
+                    logger.info(f"  ✨ [NEW BEST] [Iter {i+1}/{n_iter}] Best Score: {best_score:.4f}")
             
             logger.info(f"🏆 Best Architecture Selected: {best_params}")
         else:
