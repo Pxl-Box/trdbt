@@ -105,8 +105,8 @@ def train_and_export_model():
 
         # CRITICAL: Move data to GPU Pinned Memory once
         logger.info("⚡ Moving data to GPU DeviceQuantileDMatrix (Absolute Ruthlessness)...")
-        # Using DeviceQuantileDMatrix for maximum GPU-native throughput
-        dtrain = xgb.DMatrix(X, label=y, device='cuda')
+        # Using DMatrix for maximum GPU-native throughput
+        dtrain = xgb.DMatrix(X, label=y)
         
         is_turbo = NODE_CONFIG.get("deep_trainer", {}).get("turbo_mode", True)
         best_params = {
