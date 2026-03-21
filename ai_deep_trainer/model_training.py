@@ -65,18 +65,9 @@ def load_all_data() -> pd.DataFrame:
 
 def prepare_data(master_df: pd.DataFrame):
     """Separates Features (X) from Target Labels (y)."""
-    # Define features we want the model to learn from (Exclude raw price/volume)
-    base_features = [
-        'ret_1_bar', 'ret_5_bar', 'ret_20_bar',
-        'dist_sma_20', 'dist_sma_50',
-        'rsi_14', 'rsi_7',
-        'macd', 'macd_signal', 'macd_hist', 'macd_trend',
-        'bar_range_pct', 'volatility_20',
-        'bb_width', 'atr_pct', 'vol_surge'
-    ]
-    
-    # We dynamically build the column list for both timeframes
-    feature_cols = [f"{f}_15m" for f in base_features] + [f"{f}_1d" for f in base_features]
+    # Dynamically select all columns that end with our timeframe suffixes
+    # This automatically picks up Phase 4 SRS features (ret_vs_spy_1d, etc.)
+    feature_cols = [c for c in master_df.columns if c.endswith("_15m") or c.endswith("_1d")]
     target_col = 'target_win'
     
     # 1. Clean the data (Models hate NaNs and Infs)
