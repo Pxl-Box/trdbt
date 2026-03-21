@@ -269,10 +269,16 @@ class MeanReversionStrategy:
             return {
                 "signal": "SELL",
                 "price":  current_price,
+                "ai_win_prob": ai_win_prob,
                 "reason": f"Price returned to basis ({basis:.4f}) {diag}"
             }
 
-        return {"signal": "WAIT", "price": current_price, "reason": f"No conditions met {diag}"}
+        return {
+            "signal": "WAIT", 
+            "price": current_price, 
+            "ai_win_prob": ai_win_prob,
+            "reason": f"No conditions met {diag}"
+        }
 
     def get_current_atr(self, ticker: str, multiplier: float = 1.0) -> float:
         """
