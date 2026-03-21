@@ -906,6 +906,20 @@ class TradingBot:
         available_capital = self.get_available_capital()
         logger.info(f"Available capital this cycle: {available_capital:.2f}")
 
+        # 5b. Pre-fetch benchmarks for Phase 4 SRS ONCE per cycle
+        benchmark_dfs_1d = {}
+        benchmark_dfs_15m = {}
+        if getattr(self, 'quant_engine', None) and self.quant_engine.is_ai_active():
+            for bm in ["SPY", "QQQ", "IWM"]:
+                try:
+                    b_1d = self.strategy.get_historical_data(bm, interval="1d", period="5d")
+                    if not b_1d.empty: benchmark_dfs_1d[bm] = b_1d
+                    
+                    b_15m = self.strategy.get_historical_data(bm, interval="15m", period="5d")
+                    if not b_15m.empty: benchmark_dfs_15m[bm] = b_15m
+                except Exception as e:
+                    logger.warning(f"[Benchmarks] Failed to pre-fetch {bm}: {e}")
+
         # 6. Iterate tickers
         tickers = self.config.get("tickers", [])
 
@@ -929,7 +943,12 @@ class TradingBot:
 
             logger.info(f"Analyzing {ticker}...")
             try:
-                signal_data = self.strategy.analyze(ticker, quant_engine=getattr(self, 'quant_engine', None))
+                signal_data = self.strategy.analyze(
+                    ticker, 
+                    quant_engine=getattr(self, 'quant_engine', None),
+                    benchmarks_1d=benchmark_dfs_1d,
+                    benchmarks_15m=benchmark_dfs_15m
+                )
                 
                 # [AI Visibility] Log the win probability for the user dashboard
                 ai_prob = signal_data.get('ai_win_prob')

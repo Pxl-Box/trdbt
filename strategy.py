@@ -38,7 +38,7 @@ class MeanReversionStrategy:
             logger.error(f"Failed to fetch data for {ticker}: {e}")
             return pd.DataFrame()
 
-    def _generate_ml_features(self, df: pd.DataFrame, timeframe_label: str, benchmark_rets: dict = None) -> pd.DataFrame:
+    def _generate_ml_features(self, df: pd.DataFrame, timeframe_label: str, benchmark_dfs: dict = None) -> pd.DataFrame:
         if len(df) < 50:
             return pd.DataFrame()
         df = df.copy()
@@ -87,9 +87,14 @@ class MeanReversionStrategy:
             df['vol_surge'] = 1.0
 
         # Phase 4 SRS Calculation
-        df['ret_vs_spy'] = df['ret_1_bar'] - benchmark_rets.get('SPY', df['ret_1_bar']) if benchmark_rets else 0.0
-        df['ret_vs_qqq'] = df['ret_1_bar'] - benchmark_rets.get('QQQ', df['ret_1_bar']) if benchmark_rets else 0.0
-        df['ret_vs_iwm'] = df['ret_1_bar'] - benchmark_rets.get('IWM', df['ret_1_bar']) if benchmark_rets else 0.0
+        for bm_name in ['SPY', 'QQQ', 'IWM']:
+            if benchmark_dfs and bm_name in benchmark_dfs and not benchmark_dfs[bm_name].empty:
+                bm_close = benchmark_dfs[bm_name]['Close']
+                aligned_close = bm_close.reindex(df.index, method='ffill')
+                bm_ret = np.log(aligned_close / aligned_close.shift(1))
+                df[f'ret_vs_{bm_name.lower()}'] = (df['ret_1_bar'] - bm_ret).fillna(0)
+            else:
+                df[f'ret_vs_{bm_name.lower()}'] = 0.0
 
         # STRICT COLUMN LIST (Must match brain's training features exactly)
         feature_order = [
@@ -103,7 +108,7 @@ class MeanReversionStrategy:
         feats.columns = [f"{c}_{timeframe_label}" for c in feats.columns]
         return feats
 
-    def analyze(self, ticker: str, quant_engine=None) -> dict:
+    def analyze(self, ticker: str, quant_engine=None, benchmarks_1d=None, benchmarks_15m=None) -> dict:
         """
         Calculates indicators and returns a dictionary with current signals.
         If a quant_engine is provided containing an ML model, MTF features are engineered
@@ -179,21 +184,9 @@ class MeanReversionStrategy:
         ai_win_prob = 0.50
         if quant_engine and quant_engine.is_ai_active():
             try:
-                # ── Live Sector-Relative Strength (SRS) ──────────────────
-                # Fetch benchmark returns — these are the same features the
-                # Data Lake stitches into the training data (Phase 4).
-                benchmarks = {"SPY": 0.0, "QQQ": 0.0, "IWM": 0.0}
-                for bm in benchmarks:
-                    try:
-                        bm_df = self.get_historical_data(bm, interval="1d", period="5d")
-                        if not bm_df.empty and len(bm_df) >= 2:
-                            benchmarks[bm] = float(np.log(bm_df["Close"].iloc[-1] / bm_df["Close"].iloc[-2]))
-                    except Exception:
-                        pass # Keep 0.0 if fetch fails
-
                 # Generate features using the STRICT 38-feature order
-                feats_15m = self._generate_ml_features(df, "15m", benchmark_rets=benchmarks)
-                feats_1d = self._generate_ml_features(df_1d, "1d", benchmark_rets=benchmarks)
+                feats_15m = self._generate_ml_features(df, "15m", benchmark_dfs=benchmarks_15m)
+                feats_1d = self._generate_ml_features(df_1d, "1d", benchmark_dfs=benchmarks_1d)
                 
                 if feats_15m.empty or feats_1d.empty:
                     raise ValueError("Empty features generated")
@@ -213,10 +206,9 @@ class MeanReversionStrategy:
                 ai_win_prob = quant_engine.get_win_probability(feature_df)
                 
                 srs_spy = feature_df["ret_vs_spy_1d"].iloc[0]
-                diag += f" [SRS vs SPY: {srs_spy:+.4f}] [AI Prob: {ai_win_prob*100:.1f}%]"
+                diag += f" [SRS vs SPY 1d: {srs_spy:+.4f}] [AI Prob: {ai_win_prob*100:.1f}%]"
             except Exception as e:
                 logger.warning(f"[{ticker}] AI Inference failed: {e}")
-
 
         # ── Entry Logic ───────────────────────────────────────────────────────
         # AI OVERRIDE: If the Deep Learning model is highly confident, bypass dumb math
