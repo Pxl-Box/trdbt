@@ -111,7 +111,7 @@ def train_and_export_model():
         scale_weight = num_losses / num_wins if num_wins > 0 else 1.0
         
         # Check for Turbo Mode (Hyperparameter Tuning)
-        is_turbo = NODE_CONFIG.get("deep_trainer", {}).get("turbo_mode", False)
+        is_turbo = NODE_CONFIG.get("deep_trainer", {}).get("turbo_mode", True)
         
         if is_turbo:
             logger.info("🚀 TURBO MODE ENABLED: Starting High-Intensity Hyperparameter Optimization...")
