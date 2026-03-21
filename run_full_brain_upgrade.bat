@@ -7,13 +7,11 @@ echo    TRDBT: PHASE 4 ULTIMATE BRAIN UPGRADE
 echo =======================================================
 echo.
 
-:: 1. Sync Latest Code
-echo [STEP 1/4] Pulling latest Phase 4 logic from GitHub...
-git pull origin main
+:: 1. Sync Latest Code (Crucial to get AI architecture updates from Antigravity)
+echo [STEP 1/4] Checking for latest Phase 4 logic from GitHub...
+git pull origin main --quiet
 if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Git pull failed. Check your internet connection.
-    pause
-    exit /b
+    echo [WARNING] Could not pull latest code. Continuing with local version...
 )
 
 :: 2. Data Ingestion (Macro + Micro + Benchmarks)
