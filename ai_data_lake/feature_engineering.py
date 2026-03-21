@@ -204,9 +204,10 @@ def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: 
 
         # ── CRITICAL: Anti Look-Ahead Bias on Daily Data ─────────────────
         feats_1d = feats_1d.shift(1)
-        # Only drop rows where CORE features (not SRS) are NaN after the shift
-        core_1d_cols = [c for c in feats_1d.columns if c not in srs_1d_cols]
-        feats_1d.dropna(subset=core_1d_cols, inplace=True)
+        # Fill NaN SRS columns with 0 (neutral = no data), then drop only rows
+        # where CORE indicator columns are missing after the 1-row shift.
+        feats_1d.fillna(0, inplace=True)
+        feats_1d.dropna(inplace=True)
         
         # Timezone alignment for merge_asof
         if df_15m.index.tzinfo != feats_1d.index.tzinfo:
@@ -229,9 +230,11 @@ def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: 
         future_return = (df_15m["close"].shift(-26) - df_15m["close"]) / df_15m["close"]
         stitched["target_win"] = (future_return > 0.01).astype(int)
         
-        # Only drop rows missing core data — SRS cols are already filled with 0
-        core_stitched_cols = [c for c in stitched.columns if c not in srs_1d_cols + srs_15m_cols + ["target_win"]]
-        stitched.dropna(subset=core_stitched_cols, inplace=True)
+        # Fill ANY remaining NaN in the stitched frame with 0 — this is the
+        # safety net that guarantees benchmark misalignments never wipe rows.
+        stitched.fillna(0, inplace=True)
+        # Only require the target label to exist (non-NaN) for training.
+        stitched.dropna(subset=["target_win"], inplace=True)
         
         if stitched.empty:
             logger.warning(f"[{ticker}] Stitched dataframe is empty after cleanup.")
