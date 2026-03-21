@@ -99,6 +99,7 @@ class TradingBot:
           peak_equity       highest total equity seen (for kill switch)
           open_trades       { ticker: { qty, sl_order_id, entry_price } }
           cooldowns         { ticker: ISO-timestamp of last close }
+          ticker_health     { ticker: { error_count, is_paused, last_error } }
         """
         if Path(STATE_FILE).exists():
             try:
@@ -108,6 +109,7 @@ class TradingBot:
                     s.setdefault("peak_equity", 0.0)
                     s.setdefault("open_trades", {})
                     s.setdefault("cooldowns", {})
+                    s.setdefault("ticker_health", {})
                     return s
             except Exception:
                 pass
@@ -115,7 +117,8 @@ class TradingBot:
             "peak_equity":   0.0,
             "open_trades":   {},
             "pending_orders": {},   # order_id -> {ticker, qty, sl_price, t212_ticker}
-            "cooldowns":     {}
+            "cooldowns":     {},
+            "ticker_health":  {}
         }
 
     def save_state(self):
@@ -905,6 +908,12 @@ class TradingBot:
         this_cycle_buys  = set()  # tickers still showing BUY this cycle
 
         for ticker in tickers:
+            # Ticker Health Check
+            health = self.state.setdefault("ticker_health", {}).setdefault(ticker, {"error_count": 0, "is_paused": False})
+            if health.get("is_paused"):
+                logger.info(f"[{ticker}] Ticker is PAUSED due to persistent errors. Skipping.")
+                continue
+
             # Per-ticker session check
             if not self.is_ticker_session_open(ticker):
                 logger.info(f"[{ticker}] Market closed. Skipping.")
@@ -913,8 +922,19 @@ class TradingBot:
             logger.info(f"Analyzing {ticker}...")
             try:
                 signal_data = self.strategy.analyze(ticker, quant_engine=getattr(self, 'quant_engine', None))
+                # Reset error count on success
+                health["error_count"] = 0
+                health["is_paused"] = False
             except Exception as e:
-                logger.error(f"[{ticker}] Strategy error: {e}", exc_info=True)
+                health["error_count"] = health.get("error_count", 0) + 1
+                health["last_error"]  = str(e)
+                if health["error_count"] >= 3:
+                    health["is_paused"] = True
+                    logger.error(f"⚠️ [{ticker}] CRITICAL: 3 consecutive errors. PAUSING ticker for user review: {e}")
+                else:
+                    logger.error(f"[{ticker}] Strategy error (attempt {health['error_count']}/3): {e}", exc_info=True)
+                
+                self.save_state()
                 time.sleep(1)
                 continue
 

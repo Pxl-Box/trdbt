@@ -4,6 +4,7 @@ import datetime
 import requests
 from pathlib import Path
 from trading212_client import Trading212Client
+from quant_inference import QuantInference
 
 st.set_page_config(
     page_title="T212 Algo Dashboard",
@@ -25,6 +26,13 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=4)
+
+@st.cache_resource
+def get_ai_engine(model_path):
+    try:
+        return QuantInference(model_path)
+    except Exception:
+        return None
 
 config = load_config()
 
@@ -82,11 +90,12 @@ if api_key:
 
 @st.dialog("⚙️ Settings", width="large")
 def show_settings():
-    tab_api, tab_tickers, tab_strategy, tab_discovery, tab_diag = st.tabs([
+    tab_api, tab_tickers, tab_strategy, tab_discovery, tab_health, tab_diag = st.tabs([
         "🔑 API & Control",
         "📋 Watchlist",
         "🧠 Strategy",
         "🌎 Discovery",
+        "🌡️ Ticker Health",
         "🛠 Diagnostics",
     ])
 
@@ -512,6 +521,57 @@ def show_settings():
         else:
             st.info("Click 'Refresh Discovery' to see the latest trending stocks.")
 
+    # ── Ticker Health ─────────────────────────────────────────────────────
+    with tab_health:
+        st.subheader("🌡️ Ticker Health & Auto-Pause")
+        st.caption("The bot automatically pauses tickers that error out 3 times in a row.")
+        
+        # Load state freshly from file to get newest health data
+        state_path = Path("bot_state.json")
+        if state_path.exists():
+            try:
+                with open(state_path, "r") as f:
+                    state_data = json.load(f)
+            except Exception:
+                state_data = {}
+        else:
+            state_data = {}
+            
+        health_data = state_data.get("ticker_health", {})
+        paused_tickers = {k: v for k, v in health_data.items() if v.get("is_paused")}
+        
+        if paused_tickers:
+            for ticker, info in paused_tickers.items():
+                with st.container(border=True):
+                    c1, c2 = st.columns([3, 1])
+                    c1.markdown(f"**{ticker}**")
+                    c1.write(f"❌ Error count: `{info.get('error_count')}`")
+                    c1.caption(f"Last error: `{info.get('last_error')}`")
+                    
+                    if c2.button("♻️ Resume", key=f"resume_{ticker}", use_container_width=True):
+                        # Clear health in state
+                        info["is_paused"] = False
+                        info["error_count"] = 0
+                        with open(state_path, "w") as f:
+                            json.dump(state_data, f, indent=4)
+                        st.success(f"Resumed {ticker}.")
+                        st.rerun()
+                        
+                    if c2.button("🗑️ Remove", key=f"remove_health_{ticker}", use_container_width=True):
+                        # Remove from config tickers
+                        if ticker in st.session_state.tickers:
+                            st.session_state.tickers.remove(ticker)
+                            config["tickers"] = st.session_state.tickers
+                            save_config(config)
+                        # Remove from health record
+                        health_data.pop(ticker, None)
+                        with open(state_path, "w") as f:
+                            json.dump(state_data, f, indent=4)
+                        st.error(f"Removed {ticker}.")
+                        st.rerun()
+        else:
+            st.success("✅ All tickers in your watchlist are healthy!")
+
     # ── Diagnostics & Logs ────────────────────────────────────────────────
     with tab_diag:
         st.subheader("📥 Download Bot Logs")
@@ -593,9 +653,19 @@ st.markdown("---")
 status_color = {"RUNNING": "🟢", "PAUSED": "🟡", "LOCKED": "🔴"}.get(
     config.get("bot_status", "LOCKED"), "⚪"
 )
+
+# AI Status determination
+ai_status = "🔴 AI OFF"
+if config.get("quant_sizing_enabled", False):
+    engine = get_ai_engine(config.get("ml_model_path", "trained_models/ai_brain_v1.pkl"))
+    if engine and engine.is_ai_active():
+        ai_status = "🤖 AI ACTIVE"
+    else:
+        ai_status = "⚠️ AI ERROR"
+
 st.markdown(
     f"## T212 Algo Dashboard &nbsp;&nbsp; {status_color} `{config.get('bot_status','UNKNOWN')}` "
-    f"&nbsp;·&nbsp; `{api_mode}` mode",
+    f"&nbsp;·&nbsp; `{api_mode}` mode &nbsp;·&nbsp; {ai_status}",
     unsafe_allow_html=True,
 )
 
