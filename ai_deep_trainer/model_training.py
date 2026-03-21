@@ -117,12 +117,12 @@ def train_and_export_model():
             logger.info("🚀 TURBO MODE ENABLED: Starting High-Intensity Hyperparameter Optimization...")
             
             param_grid = {
-                'n_estimators': [200, 500, 1000],
-                'max_depth': [4, 6, 8, 10],
-                'learning_rate': [0.01, 0.05, 0.1],
+                'n_estimators': [500, 1000, 2000], # Triple the tree count for ruthless depth
+                'max_depth': [6, 8, 10, 12],
+                'learning_rate': [0.01, 0.03, 0.05, 0.1],
                 'subsample': [0.7, 0.8, 0.9],
                 'colsample_bytree': [0.7, 0.8, 0.9],
-                'gamma': [0, 0.1, 0.2]
+                'gamma': [0, 0.1, 0.2, 0.5]
             }
             
             base_model = xgb.XGBClassifier(
@@ -130,18 +130,20 @@ def train_and_export_model():
                 device='cuda',
                 random_state=42,
                 scale_pos_weight=scale_weight,
-                n_jobs=1  # Prevent CPU thread contention; let the GPU do all the work
+                n_jobs=1 # Individual models stay on 1 thread to avoid GPU contention
             )
             
             # Use RandomizedSearch with TimeSeriesSplit
+            # n_jobs=-1 here will launch multiple parallel GPU trainings!
             search = RandomizedSearchCV(
                 estimator=base_model,
                 param_distributions=param_grid,
-                n_iter=20, # Try 20 different combinations
+                n_iter=100, # Search 100 combinations (5x more ruthless)
                 scoring='accuracy',
                 cv=tscv,
                 verbose=1,
-                random_state=42
+                random_state=42,
+                n_jobs=-1 # EXTREME: Run parallel GPU jobs
             )
             
             logger.info("Searching for the best possible model parameters (this will take longer)...")
