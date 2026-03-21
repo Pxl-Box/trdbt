@@ -113,12 +113,42 @@ def generate_base_features(df: pd.DataFrame, timeframe_label: str) -> pd.DataFra
     
     return feats
 
-def process_and_stitch_ticker(ticker: str):
+BENCHMARKS_DIR = BASE_DIR / "benchmarks"
+
+def load_benchmark_returns(interval: str = "1d") -> dict:
+    """
+    Loads pre-downloaded benchmark parquets and returns a dict of
+    {ticker: pd.Series} capturing the 1-bar log return for each benchmark.
+    """
+    benchmarks = {}
+    for bm in ["SPY", "QQQ", "IWM"]:
+        path = BENCHMARKS_DIR / f"{bm}_benchmark_{interval}.parquet"
+        if not path.exists():
+            logger.warning(f"[Benchmark] {bm} not found. Run data_ingestion.py first.")
+            continue
+        try:
+            df = pd.read_parquet(path)
+            # standardise column names (lowercase)
+            df.columns = [c.lower() for c in df.columns]
+            if df.index.tz is None:
+                df.index = df.index.tz_localize("UTC")
+            else:
+                df.index = df.index.tz_convert("UTC")
+            df = df.sort_index()
+            ret = np.log(df["close"] / df["close"].shift(1))
+            benchmarks[bm] = ret
+        except Exception as e:
+            logger.error(f"[Benchmark] Could not load {bm}: {e}")
+    return benchmarks
+
+
+def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: dict):
     """
     Loads both the 15m and 1d raw data for a ticker.
     Calculates features for both timeframes.
     Shifts the 1d features to prevent look-ahead bias.
     Merges them using merge_asof.
+    Attaches Sector-Relative Strength (SRS) columns for SPY, QQQ, IWM.
     """
     file_1d = RAW_DATA_DIR / f"{ticker}_raw_1d.parquet"
     file_15m = RAW_DATA_DIR / f"{ticker}_raw_15m.parquet"
@@ -128,55 +158,68 @@ def process_and_stitch_ticker(ticker: str):
         return False
         
     try:
-        df_1d = pd.read_parquet(file_1d).sort_index()
+        df_1d  = pd.read_parquet(file_1d).sort_index()
         df_15m = pd.read_parquet(file_15m).sort_index()
         
-        feats_1d = generate_base_features(df_1d, "1d")
+        feats_1d  = generate_base_features(df_1d,  "1d")
         feats_15m = generate_base_features(df_15m, "15m")
         
         if feats_1d.empty or feats_15m.empty:
             logger.warning(f"[{ticker}] Insufficient data for feature generation.")
             return False
-            
-        # CRITICAL: Prevent Look-Ahead Bias on the Daily Data.
-        # Yahoo Finance marks daily candles at midnight.
-        # We only know the true Close price at the END of that day.
-        # So we MUST shift the daily features forward by 1 trading day!
+
+        # ── Sector-Relative Strength (SRS) — 1d ──────────────────────────
+        # Compute ticker's own 1d log return
+        ticker_ret_1d = np.log(df_1d["close"] / df_1d["close"].shift(1))
+        ticker_ret_1d.index = feats_1d.index  # align
+
+        for bm_name, bm_ret in benchmarks_1d.items():
+            # Align benchmark returns to the ticker's daily index
+            bm_aligned = bm_ret.reindex(feats_1d.index, method="ffill")
+            feats_1d[f"ret_vs_{bm_name.lower()}_1d"] = ticker_ret_1d - bm_aligned
+
+        # ── Sector-Relative Strength (SRS) — 15m ─────────────────────────
+        ticker_ret_15m = np.log(df_15m["close"] / df_15m["close"].shift(1))
+        ticker_ret_15m.index = feats_15m.index
+
+        for bm_name, bm_ret in benchmarks_15m.items():
+            bm_aligned = bm_ret.reindex(feats_15m.index, method="ffill")
+            feats_15m[f"ret_vs_{bm_name.lower()}_15m"] = ticker_ret_15m - bm_aligned
+
+        # ── CRITICAL: Anti Look-Ahead Bias on Daily Data ─────────────────
         feats_1d = feats_1d.shift(1)
         feats_1d.dropna(inplace=True)
         
-        # We need timezone matching for merge_asof
+        # Timezone alignment for merge_asof
         if df_15m.index.tzinfo != feats_1d.index.tzinfo:
-            logger.warning(f"[{ticker}] Tzinfo mismatch. Aligning prior to stitch.")
             if df_15m.index.tz is None:
-                df_15m.index = df_15m.index.tz_localize('UTC')
+                df_15m.index = df_15m.index.tz_localize("UTC")
             if feats_1d.index.tz is None:
-                feats_1d.index = feats_1d.index.tz_localize('UTC')
+                feats_1d.index = feats_1d.index.tz_localize("UTC")
                 
-        # Merge: For every 15m row, find the most recent 1d row (looking backward)
+        # Merge: For every 15m row, attach the most recent completed daily context
         stitched = pd.merge_asof(
             feats_15m, 
             feats_1d, 
             left_index=True, 
             right_index=True, 
-            direction='backward'
+            direction="backward"
         )
         
-        # RE-ATTACH THE TARGET LABEL
-        # The AI needs to predict 15m returns.
-        # Target: Is the profit > 1% within the next 26 candles (1 full day)?
-        future_return = (df_15m['close'].shift(-26) - df_15m['close']) / df_15m['close']
-        stitched['target_win'] = (future_return > 0.01).astype(int)
+        # ── Target Label ──────────────────────────────────────────────────
+        # Is the profit > 1% within the next 26 candles (1 full trading day)?
+        future_return = (df_15m["close"].shift(-26) - df_15m["close"]) / df_15m["close"]
+        stitched["target_win"] = (future_return > 0.01).astype(int)
         
-        # Cleanup
         stitched.dropna(inplace=True)
         
         if stitched.empty:
-            logger.warning(f"[{ticker}] Stitched dataframe is empty.")
+            logger.warning(f"[{ticker}] Stitched dataframe is empty after cleanup.")
             return False
             
         output_file = PROCESSED_DATA_DIR / f"{ticker}_features.parquet"
-        stitched.to_parquet(output_file, engine='pyarrow')
+        stitched.to_parquet(output_file, engine="pyarrow")
+        logger.info(f"[{ticker}] Stitched {len(stitched)} rows | {len(stitched.columns)} features (incl. SRS).")
         return True
         
     except Exception as e:
@@ -184,28 +227,36 @@ def process_and_stitch_ticker(ticker: str):
         return False
 
 def process_all_files():
-    """Finds all unique tickers in raw_data and stitches their timeframes."""
+    """Finds all unique tickers in raw_data and stitches their timeframes with SRS benchmarks."""
     logger.info("=== Starting Data Lake MTF Feature Stitching ===")
     
     if not RAW_DATA_DIR.exists():
         logger.error(f"Raw data directory not found at {RAW_DATA_DIR}")
         return
-        
+
+    # Pre-load benchmark returns once — shared across all tickers for speed
+    logger.info("Loading benchmark return series (SPY, QQQ, IWM)...")
+    benchmarks_1d  = load_benchmark_returns(interval="1d")
+    benchmarks_15m = load_benchmark_returns(interval="15m")
+    
     raw_files = list(RAW_DATA_DIR.glob("*.parquet"))
     tickers = set()
     for f in raw_files:
         parts = f.stem.split("_raw_")
         if len(parts) == 2:
             tickers.add(parts[0])
+
+    # Exclude benchmark tickers from processing as main tickers
+    tickers -= {"SPY", "QQQ", "IWM"}
             
-    logger.info(f"Found {len(tickers)} unique tickers for MTF processing.")
+    logger.info(f"Found {len(tickers)} unique tickers for MTF + SRS processing.")
     
     success_count = 0
     for ticker in tickers:
-        if process_and_stitch_ticker(ticker):
+        if process_and_stitch_ticker(ticker, benchmarks_1d, benchmarks_15m):
             success_count += 1
             
-    logger.info(f"=== MTF Feature Engineering Complete. Stitched {success_count}/{len(tickers)} tickers. ===")
+    logger.info(f"=== MTF + SRS Feature Engineering Complete. Stitched {success_count}/{len(tickers)} tickers. ===")
 
 if __name__ == "__main__":
     process_all_files()

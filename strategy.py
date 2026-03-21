@@ -183,12 +183,48 @@ class MeanReversionStrategy:
                 latest_1d.reset_index(drop=True, inplace=True)
                 
                 feature_df = pd.concat([latest_15m, latest_1d], axis=1)
+
+                # ── Live Sector-Relative Strength (SRS) ──────────────────
+                # Fetch benchmark returns — these are the same features the
+                # Data Lake stitches into the training data (Phase 4).
+                try:
+                    benchmarks = {"SPY": 0.0, "QQQ": 0.0, "IWM": 0.0}
+                    for bm in benchmarks:
+                        bm_df = self.get_historical_data(bm, interval="1d", period="5d")
+                        if not bm_df.empty and len(bm_df) >= 2:
+                            benchmarks[bm] = float(
+                                np.log(bm_df["Close"].iloc[-1] / bm_df["Close"].iloc[-2])
+                            )
+
+                    # Ticker's own 1-day return (vs the completed daily close)
+                    ticker_ret_1d = float(
+                        np.log(df_1d["Close"].iloc[-1] / df_1d["Close"].iloc[-2])
+                    ) if len(df_1d) >= 2 else 0.0
+
+                    # Ticker's own 15m (latest bar) return
+                    ticker_ret_15m = float(
+                        np.log(df["Close"].iloc[-1] / df["Close"].iloc[-2])
+                    ) if len(df) >= 2 else 0.0
+
+                    feature_df["ret_vs_spy_1d"]  = ticker_ret_1d  - benchmarks["SPY"]
+                    feature_df["ret_vs_qqq_1d"]  = ticker_ret_1d  - benchmarks["QQQ"]
+                    feature_df["ret_vs_iwm_1d"]  = ticker_ret_1d  - benchmarks["IWM"]
+                    feature_df["ret_vs_spy_15m"] = ticker_ret_15m - benchmarks["SPY"]
+                    feature_df["ret_vs_qqq_15m"] = ticker_ret_15m - benchmarks["QQQ"]
+                    feature_df["ret_vs_iwm_15m"] = ticker_ret_15m - benchmarks["IWM"]
+                    
+                    srs_spy = feature_df["ret_vs_spy_1d"].iloc[0]
+                    diag += f" [SRS vs SPY: {srs_spy:+.4f}]"
+                except Exception as srs_err:
+                    logger.warning(f"[{ticker}] SRS calculation failed: {srs_err}")
+
                 feature_df.fillna(0, inplace=True)
                 
                 ai_win_prob = quant_engine.get_win_probability(feature_df)
                 diag += f" [AI Prob: {ai_win_prob*100:.1f}%]"
             except Exception as e:
                 logger.warning(f"[{ticker}] AI Inference feature generation failed: {e}")
+
 
         # ── Entry Logic ───────────────────────────────────────────────────────
         # AI OVERRIDE: If the Deep Learning model is highly confident, bypass dumb math
