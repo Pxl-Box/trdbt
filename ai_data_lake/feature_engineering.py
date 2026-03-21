@@ -173,22 +173,40 @@ def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: 
         ticker_ret_1d = np.log(df_1d["close"] / df_1d["close"].shift(1))
         ticker_ret_1d.index = feats_1d.index  # align
 
+        srs_1d_cols = []
         for bm_name, bm_ret in benchmarks_1d.items():
-            # Align benchmark returns to the ticker's daily index
-            bm_aligned = bm_ret.reindex(feats_1d.index, method="ffill")
-            feats_1d[f"ret_vs_{bm_name.lower()}_1d"] = ticker_ret_1d - bm_aligned
+            # Normalise benchmark index to UTC to guarantee alignment
+            bm_ret_utc = bm_ret.copy()
+            if bm_ret_utc.index.tz is None:
+                bm_ret_utc.index = bm_ret_utc.index.tz_localize("UTC")
+            else:
+                bm_ret_utc.index = bm_ret_utc.index.tz_convert("UTC")
+            bm_aligned = bm_ret_utc.reindex(feats_1d.index, method="ffill")
+            col = f"ret_vs_{bm_name.lower()}_1d"
+            feats_1d[col] = (ticker_ret_1d - bm_aligned).fillna(0)  # 0 = neutral if missing
+            srs_1d_cols.append(col)
 
         # ── Sector-Relative Strength (SRS) — 15m ─────────────────────────
         ticker_ret_15m = np.log(df_15m["close"] / df_15m["close"].shift(1))
         ticker_ret_15m.index = feats_15m.index
 
+        srs_15m_cols = []
         for bm_name, bm_ret in benchmarks_15m.items():
-            bm_aligned = bm_ret.reindex(feats_15m.index, method="ffill")
-            feats_15m[f"ret_vs_{bm_name.lower()}_15m"] = ticker_ret_15m - bm_aligned
+            bm_ret_utc = bm_ret.copy()
+            if bm_ret_utc.index.tz is None:
+                bm_ret_utc.index = bm_ret_utc.index.tz_localize("UTC")
+            else:
+                bm_ret_utc.index = bm_ret_utc.index.tz_convert("UTC")
+            bm_aligned = bm_ret_utc.reindex(feats_15m.index, method="ffill")
+            col = f"ret_vs_{bm_name.lower()}_15m"
+            feats_15m[col] = (ticker_ret_15m - bm_aligned).fillna(0)
+            srs_15m_cols.append(col)
 
         # ── CRITICAL: Anti Look-Ahead Bias on Daily Data ─────────────────
         feats_1d = feats_1d.shift(1)
-        feats_1d.dropna(inplace=True)
+        # Only drop rows where CORE features (not SRS) are NaN after the shift
+        core_1d_cols = [c for c in feats_1d.columns if c not in srs_1d_cols]
+        feats_1d.dropna(subset=core_1d_cols, inplace=True)
         
         # Timezone alignment for merge_asof
         if df_15m.index.tzinfo != feats_1d.index.tzinfo:
@@ -211,7 +229,9 @@ def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: 
         future_return = (df_15m["close"].shift(-26) - df_15m["close"]) / df_15m["close"]
         stitched["target_win"] = (future_return > 0.01).astype(int)
         
-        stitched.dropna(inplace=True)
+        # Only drop rows missing core data — SRS cols are already filled with 0
+        core_stitched_cols = [c for c in stitched.columns if c not in srs_1d_cols + srs_15m_cols + ["target_win"]]
+        stitched.dropna(subset=core_stitched_cols, inplace=True)
         
         if stitched.empty:
             logger.warning(f"[{ticker}] Stitched dataframe is empty after cleanup.")
