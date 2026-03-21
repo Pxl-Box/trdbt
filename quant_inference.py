@@ -3,6 +3,7 @@ import logging
 import pickle
 import pandas as pd
 import numpy as np
+import xgboost as xgb
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +44,17 @@ class QuantInference:
             return 0.50
 
         try:
-            # Assuming a scikit-learn or xgboost classifier with predict_proba
-            # Class 1 usually represents the "Win" or "Buy" signal
-            probabilities = self.model.predict_proba(features_df)
+            if hasattr(self.model, 'predict_proba'):
+                # Scikit-learn wrapper (XGBClassifier)
+                probabilities = self.model.predict_proba(features_df)
+                win_prob = float(probabilities[-1][1])
+            else:
+                # Native XGBoost Booster or other
+                # Use DMatrix for inference (fast)
+                dmat = xgb.DMatrix(features_df)
+                preds = self.model.predict(dmat)
+                win_prob = float(preds[-1])
             
-            # Extract the probability of the positive class (Win) for the latest row
-            win_prob = float(probabilities[-1][1])
             return win_prob
         except Exception as e:
             logger.warning(f"[Quant] Inference failed: {e}. Defaulting to 50% probability.")
