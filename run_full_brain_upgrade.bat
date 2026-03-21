@@ -27,24 +27,11 @@ if %ERRORLEVEL% NEQ 0 (
 :: 3. Wipe stale processed files BEFORE Feature Engineering
 ::    Without this, old broken files mix with new ones and wipe all rows in the trainer.
 echo.
+:: 3. Wipe stale processed files BEFORE Feature Engineering
+::    Without this, old broken files mix with new ones and wipe all rows in the trainer.
+echo.
 echo [STEP 3a/4] Clearing stale processed_data files...
-python -c "
-from pathlib import Path
-import json, sys
-
-try:
-    cfg = json.load(open('node_config.json'))
-    d = Path(cfg.get('shared_drive_path', r'D:\trd-data')) / 'processed_data'
-except:
-    d = Path(r'D:\trd-data\processed_data')
-
-deleted = 0
-if d.exists():
-    for f in d.glob('*.parquet'):
-        f.unlink()
-        deleted += 1
-print(f'Cleared {deleted} stale processed files from {d}')
-"
+python -c "from pathlib import Path; import json; try: d = Path(json.load(open('node_config.json')).get('shared_drive_path', r'D:\trd-data')) / 'processed_data'; [f.unlink() for f in d.glob('*.parquet')] if d.exists() else None; print(f'Cleared stale files from {d}') except Exception as e: print(f'Skip clear: {e}')"
 
 :: 4. Feature Engineering (The Stitching Engine)
 echo.
