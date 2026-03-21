@@ -129,7 +129,8 @@ def train_and_export_model():
                 tree_method='hist',
                 device='cuda',
                 random_state=42,
-                scale_pos_weight=scale_weight
+                scale_pos_weight=scale_weight,
+                n_jobs=1  # Prevent CPU thread contention; let the GPU do all the work
             )
             
             # Use RandomizedSearch with TimeSeriesSplit
