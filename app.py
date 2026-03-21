@@ -358,7 +358,9 @@ def show_settings():
         tier2   = float(config.get("trailing_sl_tier2_atr", 3.0))
         new_regime_enabled = bool(config.get("smart_regime_enabled", False))
         new_tp_mode        = config.get("tp_target_mode", "Fixed: Mean (Middle BB)")
+        new_tp_atr_mult    = float(config.get("tp_atr_multiplier", 2.0))
         new_quant_sizing   = bool(config.get("quant_sizing_enabled", False))
+        new_kelly_frac     = float(config.get("kelly_fraction", 0.5))
         new_quant_path     = config.get("ml_model_path", "trained_models/ai_brain_v1.pkl")
 
         if preset_mode in PRESET_PROFILES:
@@ -407,6 +409,11 @@ def show_settings():
             tier2 = t2c.number_input("Tier 2 ATR (lock profit)", value=tier2, step=0.1)
 
             st.markdown("---")
+            st.subheader("🎯 Dynamic Take-Profit (Lock the Bag)")
+            new_tp_atr_mult = st.number_input("Take Profit (Target ATR Multiplier)", value=new_tp_atr_mult, step=0.1)
+            st.caption("When the bot buys, it immediately places a Limit Sell at this volatility multiple (e.g., Target is 2.0x ATR above entry).")
+
+            st.markdown("---")
             st.subheader("🧭 Regime Switching & TP Optimisation")
             new_regime_enabled = st.toggle(
                 "Smart Regime Filter (block buys when stock is in a downtrend)",
@@ -425,7 +432,25 @@ def show_settings():
                 "Enable Kelly Criterion Sizing (Tri-Node Architecture)",
                 value=new_quant_sizing
             )
-            st.caption("When enabled, the bot bypasses the static Risk/Trade % and dynamically calculates optimal bet size using the Kelly Criterion formula based on Win Probability and TP/SL setup. Requires `quant_inference.py` output.")
+            
+            if new_quant_sizing:
+                st.caption("When enabled, the bot bypasses the static Risk/Trade % and dynamically calculates optimal bet size using the Kelly Criterion formula based on Win Probability and TP/SL setup. Requires `quant_inference.py` output.")
+                kelly_opts = {
+                    "1.0 (Full Kelly - Max Risk)": 1.0, 
+                    "0.5 (Half Kelly - Moderate)": 0.5, 
+                    "0.25 (Quarter Kelly - Standard)": 0.25, 
+                    "0.125 (Eighth Kelly - Safe)": 0.125
+                }
+                kf_labels = list(kelly_opts.keys())
+                # Find matching index
+                kf_idx = 1
+                for i, (k, v) in enumerate(kelly_opts.items()):
+                    if abs(v - new_kelly_frac) < 0.01:
+                        kf_idx = i
+                sel_kf = st.selectbox("Kelly Fraction Calibration", kf_labels, index=kf_idx)
+                new_kelly_frac = kelly_opts[sel_kf]
+            else:
+                st.caption("Kelly sizing is OFF. Bot will use the Fixed Risk/Trade % instead.")
             
             new_quant_path = st.text_input(
                 "AI Model Local Path (.pkl file)",
@@ -463,7 +488,9 @@ def show_settings():
                 "trailing_sl_tier2_atr": tier2,
                 "smart_regime_enabled":  new_regime_enabled,
                 "tp_target_mode":        new_tp_mode,
+                "tp_atr_multiplier":     new_tp_atr_mult,
                 "quant_sizing_enabled":  new_quant_sizing,
+                "kelly_fraction":        new_kelly_frac,
                 "ml_model_path":         new_quant_path,
             })
             config.update(update)

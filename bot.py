@@ -462,8 +462,14 @@ class TradingBot:
         After fill: both a stop-loss AND a take-profit limit order are placed.
         """
         price     = float(signal_data.get("price", 0.0))
-        target_tp = float(signal_data.get("target_tp", 0.0))
         atr       = float(signal_data.get("atr", 0.0))
+
+        # Dynamic Take-Profit overrides strategy TP
+        tp_atr_mult = float(self.config.get("tp_atr_multiplier", 2.0))
+        if atr > 0:
+            target_tp = round(price + (atr * tp_atr_mult), 4)
+        else:
+            target_tp = float(signal_data.get("target_tp", 0.0))
 
         min_investment = self.config.get("min_investment_amount", 1.0)
         if price <= 0 or available_capital < min_investment:
@@ -495,12 +501,14 @@ class TradingBot:
             win_prob = float(signal_data.get("ai_win_prob", 0.55))
             if tp_distance > 0 and sl_distance > 0:
                 reward_risk_ratio = tp_distance / sl_distance
-                risk_pct = self.quant_engine.calculate_kelly_fraction(
+                kelly_frac = float(self.config.get("kelly_fraction", 0.25))
+                raw_kelly = self.quant_engine.calculate_kelly_fraction(
                     win_prob=win_prob, 
                     reward_risk_ratio=reward_risk_ratio,
                     max_allocation=0.05
                 )
-                logger.info(f"[{ticker}] 🤖 Quant Sizing: WinProb={win_prob:.2f}, R:R={reward_risk_ratio:.2f} -> Kelly {risk_pct*100:.2f}%")
+                risk_pct = raw_kelly * kelly_frac
+                logger.info(f"[{ticker}] 🤖 Quant Sizing: WinProb={win_prob:.2f}, R:R={reward_risk_ratio:.2f} -> Base Kelly {raw_kelly*100:.2f}% | Applied ({kelly_frac}x) -> {risk_pct*100:.2f}%")
             else:
                 risk_pct = float(self.config.get("risk_per_trade_pct", 0.01))
         else:
