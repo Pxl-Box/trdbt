@@ -166,19 +166,14 @@ def train_and_export_model():
         logger.info("⚡ Training final Deployment Brain on GPU...")
         final_model_native = xgb.train(best_params, dtrain, num_boost_round=best_params.get('n_estimators', 500))
         
-        # Convert to XGBClassifier for compat with existing QuantInference logic
-        # This keeps the deployment easy while using the fast train above
-        final_model = xgb.XGBClassifier()
-        final_model._Booster = final_model_native
-        
-        # Export Model
+        # Export Model (Pickling the native Booster object directly)
         export_path = MODELS_DIR / "ai_brain_v1.pkl"
         backup_path = MODELS_DIR / f"ai_brain_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
         
         with open(export_path, 'wb') as f:
-            pickle.dump(final_model, f)
+            pickle.dump(final_model_native, f)
         with open(backup_path, 'wb') as f:
-            pickle.dump(final_model, f)
+            pickle.dump(final_model_native, f)
             
         logger.info(f"✅ EXTREME SUCCESS: GPU-Native Brain exported to {export_path}")
         logger.info(f"✅ CPU check: Should be idling. GPU check: Should have been pinned.")
