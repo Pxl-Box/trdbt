@@ -489,7 +489,7 @@ class TradingBot:
         tp_distance = target_tp - price
         
         if quant_enabled and hasattr(self, 'quant_engine'):
-            win_prob = float(signal_data.get("ai_win_prob", 0.60)) # Default/Mock until AI fully wired
+            win_prob = float(signal_data.get("ai_win_prob", 0.55))
             if tp_distance > 0 and sl_distance > 0:
                 reward_risk_ratio = tp_distance / sl_distance
                 risk_pct = self.quant_engine.calculate_kelly_fraction(
@@ -971,7 +971,15 @@ class TradingBot:
         # Market regime filter: skip all buys if market is in a confirmed downtrend
         market_bearish = self.is_market_bearish()
 
-        if buy_candidates and not positions_full and not market_bearish:
+        if buy_candidates and not positions_full:
+            if market_bearish:
+                # Only allow AI-driven high confidence signals to pass the bear filter
+                buy_candidates = [c for c in buy_candidates if c[2].get('ai_win_prob', 0) >= 0.65]
+                if not buy_candidates:
+                    logger.info("[regime] Market is bearish - no high-confidence AI signals. Suppressing all BUYs.")
+                    return
+                logger.info(f"[regime] Market is bearish, but found {len(buy_candidates)} High-Confidence AI signals. Bypassing filter.")
+
             # Sort best score first
             buy_candidates.sort(key=lambda x: x[0], reverse=True)
 
