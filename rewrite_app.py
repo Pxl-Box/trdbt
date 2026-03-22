@@ -1,94 +1,6 @@
-import streamlit as st
-import json
-import datetime
-import requests
-from pathlib import Path
-from trading212_client import Trading212Client
-from quant_inference import QuantInference
+import sys, os
 
-st.set_page_config(
-    page_title="T212 Algo Dashboard",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-CONFIG_FILE = "config.json"
-LOG_FILE    = "logs/bot.log"
-
-# ──────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────
-
-def load_config():
-    with open(CONFIG_FILE, "r") as f:
-        return json.load(f)
-
-def save_config(cfg):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f, indent=4)
-
-@st.cache_resource
-def get_ai_engine(model_path):
-    try:
-        return QuantInference(model_path)
-    except Exception:
-        return None
-
-config = load_config()
-
-if "tickers" not in st.session_state:
-    st.session_state.tickers = config.get("tickers", [])
-
-if "settings_open" not in st.session_state:
-    st.session_state.settings_open = False
-
-# ──────────────────────────────────────────────────────────────────────────
-# Minimal CSS — dark card style, no sidebar clutter
-# ──────────────────────────────────────────────────────────────────────────
-
-st.markdown("""
-<style>
-    [data-testid="collapsedControl"] { display: none; }
-    [data-testid="stSidebar"]        { display: none; }
-    .metric-card {
-        background: #1e1e2e;
-        border-radius: 12px;
-        padding: 18px 22px;
-        margin-bottom: 8px;
-    }
-    .section-title {
-        font-size: 1.1rem;
-        font-weight: 600;
-        margin: 20px 0 8px 0;
-        color: #a0aec0;
-        text-transform: uppercase;
-        letter-spacing: .08em;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ──────────────────────────────────────────────────────────────────────────
-# Live API client
-# ──────────────────────────────────────────────────────────────────────────
-
-api_key    = config.get("api_key",    "")
-api_secret = config.get("api_secret", "")
-api_mode   = config.get("api_mode",   "Practice")
-client     = None
-equity     = {"free": 0.0, "total": 0.0, "invested": 0.0, "ppl": 0.0}
-
-if api_key:
-    try:
-        client = Trading212Client(api_key, api_secret, api_mode)
-        equity = client.get_account_cash() or equity
-    except Exception:
-        pass
-
-# ──────────────────────────────────────────────────────────────────────────
-# Settings overlay (st.dialog — Streamlit ≥ 1.35)
-# ──────────────────────────────────────────────────────────────────────────
-
-@st.dialog("⚙️ Settings", width="large")
+new_settings_code = """@st.dialog("⚙️ Settings", width="large")
 def show_settings():
     tab_api, tab_strategy, tab_risk, tab_ai, tab_watchlist, tab_discovery, tab_diag = st.tabs([
         "📡 System & API",
@@ -527,155 +439,27 @@ def show_settings():
                     st.error(f"Error reading live feed: {e}")
         else:
             st.info("Log file not found yet.")
+"""
 
-# ──────────────────────────────────────────────────────────────────────────
-# ⚙ Cog button — top-right corner
-# ──────────────────────────────────────────────────────────────────────────
+target_file = 'c:/Users/Conor/Documents/GitHub/trdbt/app.py'
 
-_, cog_col = st.columns([12, 1])
-with cog_col:
-    if st.button("⚙️", help="Open Settings", use_container_width=True):
-        show_settings()
+with open(target_file, 'r', encoding='utf-8') as f:
+    lines = f.readlines()
 
-st.markdown("---")
+start_idx = -1
+end_idx = -1
+for i, line in enumerate(lines):
+    if line.startswith('@st.dialog("⚙️ Settings", width="large")'):
+        start_idx = i
+    if line.startswith('# ──────────────────────────────────────────────────────────────────────────'):
+        if start_idx != -1 and i > start_idx and i + 1 < len(lines) and '⚙ Cog button' in lines[i+1]:
+            end_idx = i
+            break
 
-# ──────────────────────────────────────────────────────────────────────────
-# Main Dashboard
-# ──────────────────────────────────────────────────────────────────────────
-
-status_color = {"RUNNING": "🟢", "PAUSED": "🟡", "LOCKED": "🔴"}.get(
-    config.get("bot_status", "LOCKED"), "⚪"
-)
-
-# AI Status determination
-ai_ready = False
-engine = get_ai_engine(config.get("ml_model_path", "trained_models/ai_brain_v1.pkl"))
-if engine and engine.is_ai_active():
-    ai_ready = True
-
-kelly_enabled = config.get("quant_sizing_enabled", False)
-
-if ai_ready and kelly_enabled:
-    ai_status = "🤖 AI ACTIVE"
-elif ai_ready:
-    ai_status = "🤖 AI READY"
+if start_idx != -1 and end_idx != -1:
+    new_lines = lines[:start_idx] + [new_settings_code + "\n"] + lines[end_idx:]
+    with open(target_file, 'w', encoding='utf-8') as f:
+        f.writelines(new_lines)
+    print("SUCCESS: Rewrote show_settings in app.py")
 else:
-    ai_status = "🔴 AI OFF"
-
-st.markdown(
-    f"## T212 Algo Dashboard &nbsp;&nbsp; {status_color} `{config.get('bot_status','UNKNOWN')}` "
-    f"&nbsp;·&nbsp; `{api_mode}` mode &nbsp;·&nbsp; {ai_status}",
-    unsafe_allow_html=True,
-)
-
-# ── Metrics ───────────────────────────────────────────────────────────────
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("💰 Total Equity",   f"£{float(equity.get('total',    0)):.2f}")
-m2.metric("💵 Free Cash",      f"£{float(equity.get('free',     0)):.2f}")
-m3.metric("📈 Invested",       f"£{float(equity.get('invested', 0)):.2f}")
-ppl = float(equity.get("ppl", 0))
-m4.metric("🔄 Unrealised P/L", f"£{ppl:.2f}", delta=f"{ppl:.2f}")
-
-st.markdown("---")
-
-# ── Market Regime Indicator ───────────────────────────────────────────────
-@st.cache_data(ttl=900)
-def get_market_regime():
-    try:
-        import yfinance as yf
-        import pandas as _pd
-        _spy = yf.download("SPY", period="90d", interval="1d", progress=False)
-        if not _spy.empty:
-            if isinstance(_spy.columns, _pd.MultiIndex):
-                _spy.columns = _spy.columns.droplevel(1)
-            _sma50 = float(_spy['Close'].rolling(50).mean().iloc[-1])
-            _cur   = float(_spy['Close'].iloc[-1])
-            _bullish = _cur > _sma50
-            regime_label  = "🟢 BULLISH Market" if _bullish else "🔴 BEARISH Market"
-            regime_detail = f"SPY @ {_cur:.2f} vs 50-SMA {_sma50:.2f}"
-            return regime_label, regime_detail
-    except Exception:
-        pass
-    return "⚪ Regime Unknown", "Could not fetch SPY data"
-
-regime_label, regime_detail = get_market_regime()
-st.markdown(f"### {regime_label}")
-st.caption(regime_detail)
-
-# ── Active Market Sessions ──────────────────────────────────────────────
-st.markdown("---")
-st.subheader("🌐 Active Market Sessions")
-
-def is_ticker_open_ui(ticker):
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    _now_utc = _dt.now(_tz.utc)
-    # Crypto 24/7
-    if ticker.endswith("-USD") or "-USD" in ticker: return True
-    # EU / UK
-    if any(ticker.endswith(s) for s in [".PA", ".XC", ".L"]):
-        # EU markets generally 8am-4:30pm UTC
-        if _now_utc.weekday() >= 5: return False
-        _open_utc  = _now_utc.replace(hour=8, minute=0, second=0, microsecond=0)
-        _close_utc = _now_utc.replace(hour=16, minute=30, second=0, microsecond=0)
-        return _open_utc <= _now_utc <= _close_utc
-    # US Default
-    _now_et = _now_utc + _td(hours=-4)
-    if _now_et.weekday() >= 5: return False
-    _open_et  = _now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
-    _close_et = _now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
-    return _open_et <= _now_et <= _close_et
-
-tickers_in_config = config.get("tickers", [])
-if tickers_in_config:
-    open_list = [t for t in tickers_in_config if is_ticker_open_ui(t)]
-    closed_list = [t for t in tickers_in_config if not is_ticker_open_ui(t)]
-    
-    sc1, sc2 = st.columns(2)
-    with sc1:
-        st.markdown(f"**🟢 Open ({len(open_list)})**")
-        if open_list:
-            st.caption(", ".join(open_list[:15]) + ("..." if len(open_list) > 15 else ""))
-        else:
-            st.caption("None")
-    with sc2:
-        st.markdown(f"**🔴 Closed ({len(closed_list)})**")
-        if closed_list:
-            st.caption(", ".join(closed_list[:15]) + ("..." if len(closed_list) > 15 else ""))
-        else:
-            st.caption("None")
-else:
-    st.info("No tickers in watchlist.")
-
-st.markdown("---")
-
-# ── Open positions ────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">Open Positions</div>', unsafe_allow_html=True)
-if client:
-    try:
-        positions = client.get_open_positions()
-        if positions and isinstance(positions, list):
-            import pandas as pd
-            df = pd.DataFrame(positions)
-            priority = ["ticker", "quantity", "averagePrice", "currentPrice", "ppl", "fxPpl"]
-            cols = [c for c in priority if c in df.columns] + \
-                   [c for c in df.columns if c not in priority]
-            st.dataframe(df[cols], use_container_width=True, height=250)
-        else:
-            st.info("No open positions found.")
-    except Exception as e:
-        st.warning(f"Could not load positions: {e}")
-else:
-    st.info("No API key set. Open ⚙️ Settings → API & Control to add your key.")
-
-# ── Pending orders ────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">Pending Orders</div>', unsafe_allow_html=True)
-if client:
-    try:
-        orders = client.get_active_orders()
-        if orders and isinstance(orders, list):
-            import pandas as pd
-            st.dataframe(pd.DataFrame(orders), use_container_width=True, height=200)
-        else:
-            st.info("No pending orders.")
-    except Exception as e:
-        st.warning(f"Could not load orders: {e}")
+    print(f"FAILED: start_idx={start_idx}, end_idx={end_idx}")
