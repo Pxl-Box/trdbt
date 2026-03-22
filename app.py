@@ -474,7 +474,7 @@ def show_settings():
 
         today = datetime.date.today()
         d1, d2 = st.columns(2)
-        start_date = d1.date_input("Start Date", value=today)
+        start_date = d1.date_input("Start Date", value=today - datetime.timedelta(days=2))
         end_date   = d2.date_input("End Date",   value=today)
         t1c, t2c = st.columns(2)
         start_time = t1c.time_input("Start Time", value=datetime.time(0, 0))
