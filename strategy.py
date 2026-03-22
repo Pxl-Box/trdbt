@@ -237,7 +237,7 @@ class MeanReversionStrategy:
             # Smart Regime Filter
             if self.smart_regime_enabled and regime == "BEARISH":
                 logger.info(f"[{ticker}] BUY skipped due to Smart Regime Filter (Regime=BEARISH, P={current_price:.2f} < SMA100={sma100:.2f})")
-                return {"signal": "WAIT", "price": current_price, "reason": f"Regime filter blocked {diag}"}
+                return {"signal": "WAIT", "price": current_price, "ai_win_prob": ai_win_prob, "reason": f"Regime filter blocked {diag}"}
 
             bb_pct_below = ((lower_band - current_price) / lower_band) * 100
             
