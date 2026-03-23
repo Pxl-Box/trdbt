@@ -650,16 +650,19 @@ def get_market_regime():
     try:
         import yfinance as yf
         import pandas as _pd
+        import math as _math
         _spy = yf.download("SPY", period="90d", interval="1d", progress=False)
         if not _spy.empty:
             if isinstance(_spy.columns, _pd.MultiIndex):
                 _spy.columns = _spy.columns.droplevel(1)
-            _sma50 = float(_spy['Close'].rolling(50).mean().iloc[-1])
-            _cur   = float(_spy['Close'].iloc[-1])
-            _bullish = _cur > _sma50
-            regime_label  = "🟢 BULLISH Market" if _bullish else "🔴 BEARISH Market"
-            regime_detail = f"SPY @ {_cur:.2f} vs 50-SMA {_sma50:.2f}"
-            return regime_label, regime_detail
+            _close = _spy['Close'] if 'Close' in _spy.columns else _spy.iloc[:, 0]
+            _sma50 = float(_close.rolling(50).mean().iloc[-1])
+            _cur   = float(_close.iloc[-1])
+            if not _math.isnan(_cur) and not _math.isnan(_sma50):
+                _bullish = _cur > _sma50
+                regime_label  = "🟢 BULLISH Market" if _bullish else "🔴 BEARISH Market"
+                regime_detail = f"SPY @ {_cur:.2f} vs 50-SMA {_sma50:.2f}"
+                return regime_label, regime_detail
     except Exception:
         pass
     return "⚪ Regime Unknown", "Could not fetch SPY data"

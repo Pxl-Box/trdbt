@@ -519,8 +519,8 @@ class TradingBot:
             risk_pct = float(self.config.get("risk_per_trade_pct", 0.01))
             
         risk_amount   = total_equity * risk_pct
-        risk_qty      = round(risk_amount / sl_distance, 4)
-        max_qty       = round(available_capital / price, 4)
+        risk_qty      = round(risk_amount / sl_distance, 2)  # T212 max precision = 2 d.p.
+        max_qty       = round(available_capital / price, 2)
         quantity      = min(risk_qty, max_qty)
         limit_price   = price
         t212_ticker   = to_t212_ticker(ticker)
