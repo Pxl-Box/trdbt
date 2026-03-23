@@ -357,12 +357,19 @@ class TradingBot:
                 # Re-run analysis to get target TP
                 analysis = self.strategy.analyze(ticker)
                 target_tp = analysis.get('target_tp')
-                if target_tp and target_tp > entry_price:
-                    tp_res = self.client.place_limit_sell(t212_ticker, qty, round(float(target_tp), 4))
-                    if tp_res and tp_res.get('id'):
-                        trade['tp_order_id'] = tp_res['id']
-                        trade['tp_price']    = float(target_tp)
-                        logger.info(f"[{ticker}] Catch-up TP placed @ {target_tp:.4f}")
+                
+                # If target_tp is missing or below entry, use a default 1.5% profit target for recovery
+                if not target_tp or target_tp <= entry_price:
+                    target_tp = entry_price * 1.015
+                    logger.info(f"[{ticker}] Strategy TP ({target_tp:.4f}) below entry or missing. Using 1.5% recovery target.")
+
+                tp_res = self.client.place_limit_sell(t212_ticker, qty, round(float(target_tp), 4))
+                if tp_res and tp_res.get('id'):
+                    trade['tp_order_id'] = tp_res['id']
+                    trade['tp_price']    = float(target_tp)
+                    logger.info(f"[{ticker}] Catch-up TP placed @ {target_tp:.4f}")
+                else:
+                    logger.warning(f"[{ticker}] Catch-up TP placement FAILED: {tp_res}")
             except Exception as e:
                 logger.warning(f"[{ticker}] Failed to re-evaluate TP: {e}")
 
