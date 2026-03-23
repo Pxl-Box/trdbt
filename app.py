@@ -725,36 +725,76 @@ def load_bot_state():
     except Exception:
         return {}
 
-bot_state = load_bot_state()
-open_trades_state = bot_state.get("open_trades", {})  # ticker -> {sl_price, tp_price, qty, entry_price}
+bot_state        = load_bot_state()
+open_trades_state = bot_state.get("open_trades", {})
+realised_pnl_st  = bot_state.get("realised_pnl", [])
 
-# ── Open positions ────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+.pos-card{background:#1e1e2e;border-radius:14px;padding:18px 22px;margin-bottom:14px;border-left:4px solid #6c63ff;}
+.pos-ticker{font-size:1.2rem;font-weight:700;color:#e2e8f0;}
+.pos-sub{font-size:0.82rem;color:#a0aec0;margin-top:2px;}
+.pos-row{display:flex;gap:28px;margin-top:12px;flex-wrap:wrap;}
+.pos-item{display:flex;flex-direction:column;}
+.pos-label{font-size:0.72rem;color:#718096;text-transform:uppercase;letter-spacing:.06em;}
+.pos-value{font-size:1.05rem;font-weight:600;color:#e2e8f0;}
+.pnl-pos{color:#68d391!important;}
+.pnl-neg{color:#fc8181!important;}
+.pnl-banner{background:#1a202c;border-radius:12px;padding:16px 22px;margin-bottom:16px;border:1px solid #2d3748;}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Realised P&L ──────────────────────────────────────────────────────────
+st.markdown('<div class="section-title">Realised P&L (Closed Trades)</div>', unsafe_allow_html=True)
+if realised_pnl_st:
+    import pandas as pd
+    total = sum(float(r.get("pnl", 0)) for r in realised_pnl_st)
+    cls   = "pnl-pos" if total >= 0 else "pnl-neg"
+    sign  = "+" if total >= 0 else ""
+    st.markdown(f"""<div class="pnl-banner">
+        <span style="font-size:.85rem;color:#718096;text-transform:uppercase;letter-spacing:.06em;">Total Closed P&L</span><br>
+        <span class="{cls}" style="font-size:1.8rem;font-weight:700;">{sign}£{total:.2f}</span>
+        &nbsp;<span style="color:#718096;font-size:.85rem;">across {len(realised_pnl_st)} trade(s)</span>
+    </div>""", unsafe_allow_html=True)
+    df_pnl = pd.DataFrame(realised_pnl_st)
+    if "pnl" in df_pnl.columns:
+        df_pnl["pnl"] = df_pnl["pnl"].apply(lambda x: f"£{float(x):+.2f}")
+    st.dataframe(df_pnl, use_container_width=True, height=180, hide_index=True)
+else:
+    st.info("No closed trades recorded yet.")
+
+st.markdown("---")
+
+# ── Open Positions — Card View ────────────────────────────────────────────
 st.markdown('<div class="section-title">Open Positions</div>', unsafe_allow_html=True)
 if client:
     try:
         positions = client.get_open_positions()
         if positions and isinstance(positions, list):
-            import pandas as pd
-
-            rows = []
             for p in positions:
-                t212 = p.get("ticker", "")
-                # Strip suffix to match bot state key
-                short = t212.replace("_US_EQ", "").replace("_US_ETF", "")
-                trade = open_trades_state.get(short, open_trades_state.get(t212, {}))
-
-                rows.append({
-                    "Ticker":           t212,
-                    "Qty":              p.get("quantity", ""),
-                    "Avg Entry":        f"£{float(p.get('averagePrice', 0)):.4f}",
-                    "Current Price":    f"£{float(p.get('currentPrice', 0)):.4f}",
-                    "P/L":              f"£{float(p.get('ppl', 0)):.2f}",
-                    "🔴 Stop Loss":     f"£{float(trade['sl_price']):.4f}" if trade.get('sl_price') else "—",
-                    "🎯 Take Profit":   f"£{float(trade['tp_price']):.4f}" if trade.get('tp_price') else "—",
-                })
-
-            df = pd.DataFrame(rows)
-            st.dataframe(df, use_container_width=True, height=250, hide_index=True)
+                t212    = p.get("ticker", "")
+                short   = t212.replace("_US_EQ", "").replace("_US_ETF", "")
+                trade   = open_trades_state.get(short, open_trades_state.get(t212, {}))
+                qty     = p.get("quantity", 0)
+                entry   = float(p.get("averagePrice", 0))
+                current = float(p.get("currentPrice", 0))
+                ppl     = float(p.get("ppl", 0))
+                sl      = float(trade["sl_price"]) if trade.get("sl_price") else None
+                tp      = float(trade["tp_price"]) if trade.get("tp_price") else None
+                pcls    = "pnl-pos" if ppl >= 0 else "pnl-neg"
+                sign    = "+" if ppl >= 0 else ""
+                sl_html = f'<span class="pos-value pnl-neg">£{sl:.4f}</span>' if sl else '<span class="pos-value">—</span>'
+                tp_html = f'<span class="pos-value pnl-pos">£{tp:.4f}</span>' if tp else '<span class="pos-value">—</span>'
+                st.markdown(f"""<div class="pos-card">
+                    <div class="pos-ticker">{t212}</div>
+                    <div class="pos-sub">Qty: {qty}</div>
+                    <div class="pos-row">
+                        <div class="pos-item"><span class="pos-label">Entry</span><span class="pos-value">£{entry:.4f}</span></div>
+                        <div class="pos-item"><span class="pos-label">Current</span><span class="pos-value">£{current:.4f}</span></div>
+                        <div class="pos-item"><span class="pos-label">P / L</span><span class="pos-value {pcls}">{sign}£{ppl:.2f}</span></div>
+                        <div class="pos-item"><span class="pos-label">🔴 Stop Loss</span>{sl_html}</div>
+                        <div class="pos-item"><span class="pos-label">🎯 Take Profit</span>{tp_html}</div>
+                    </div></div>""", unsafe_allow_html=True)
         else:
             st.info("No open positions found.")
     except Exception as e:
@@ -764,56 +804,7 @@ else:
 
 st.markdown("---")
 
-# ── Bot-Managed Brackets (SL / Virtual TP) ───────────────────────────────
-st.markdown('<div class="section-title">Bot-Managed Brackets</div>', unsafe_allow_html=True)
-if open_trades_state:
-    import pandas as pd
-    sl_rows = []
-    tp_rows = []
-    for ticker, trade in open_trades_state.items():
-        sl_price = trade.get("sl_price")
-        tp_price = trade.get("tp_price")
-        entry    = trade.get("entry_price", 0)
-        qty      = trade.get("qty", "?")
-
-        if sl_price:
-            sl_rows.append({
-                "Ticker":       ticker,
-                "Qty":          qty,
-                "Entry":        f"£{float(entry):.4f}",
-                "Stop Loss $":  f"£{float(sl_price):.4f}",
-                "Downside":     f"{((float(sl_price) - float(entry)) / float(entry) * 100):.2f}%" if entry else "—",
-                "SL Order ID":  trade.get("sl_order_id", "—"),
-            })
-        if tp_price:
-            tp_rows.append({
-                "Ticker":           ticker,
-                "Qty":              qty,
-                "Entry":            f"£{float(entry):.4f}",
-                "Take Profit $":    f"£{float(tp_price):.4f}",
-                "Upside":           f"{((float(tp_price) - float(entry)) / float(entry) * 100):.2f}%" if entry else "—",
-                "Type":             "🤖 Virtual (60s heartbeat)",
-            })
-
-    bc1, bc2 = st.columns(2)
-    with bc1:
-        st.markdown("**🔴 Stop Loss Orders**")
-        if sl_rows:
-            st.dataframe(pd.DataFrame(sl_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("No tracked stop losses.")
-    with bc2:
-        st.markdown("**🎯 Virtual Take Profit Targets**")
-        if tp_rows:
-            st.dataframe(pd.DataFrame(tp_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("No virtual TPs set.")
-else:
-    st.info("Bot state file has no tracked trades.")
-
-st.markdown("---")
-
-# ── Pending orders ────────────────────────────────────────────────────────
+# ── Active Exchange Orders ────────────────────────────────────────────────
 st.markdown('<div class="section-title">Active Exchange Orders</div>', unsafe_allow_html=True)
 if client:
     try:
@@ -821,18 +812,14 @@ if client:
         if orders and isinstance(orders, list):
             import pandas as pd
             df_orders = pd.DataFrame(orders)
-            # Rename columns for clarity if they exist
-            rename_map = {
-                "ticker": "Ticker",
-                "quantity": "Qty",
-                "stopPrice": "Stop Price",
-                "limitPrice": "Limit Price",
-                "status": "Status",
-                "type": "Type",
-            }
+            rename_map = {"ticker": "Ticker", "quantity": "Qty", "stopPrice": "Stop Price",
+                          "limitPrice": "Limit Price", "status": "Status", "type": "Type"}
             df_orders.rename(columns={k: v for k, v in rename_map.items() if k in df_orders.columns}, inplace=True)
-            st.dataframe(df_orders, use_container_width=True, height=200, hide_index=True)
+            keep = [c for c in ["Ticker", "Type", "Qty", "Stop Price", "Limit Price", "Status"] if c in df_orders.columns]
+            st.dataframe(df_orders[keep] if keep else df_orders, use_container_width=True, height=200, hide_index=True)
         else:
-            st.info("No pending orders on the exchange.")
+            st.info("No active orders on the exchange.")
     except Exception as e:
         st.warning(f"Could not load orders: {e}")
+
+
