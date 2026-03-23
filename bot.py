@@ -253,11 +253,11 @@ class TradingBot:
         if imported or stale:
             self.save_state()
 
-        # Place stop-loss orders for any newly imported positions that don't have one
+        # Place brackets for any newly imported positions that don't have them
         for short_ticker in [s.split(' ')[0] for s in imported]:
             trade = open_trades.get(short_ticker)
-            if trade and trade.get('sl_order_id') is None:
-                self.place_missing_stop_loss(short_ticker, trade)
+            if trade and (trade.get('sl_order_id') is None or trade.get('tp_order_id') is None):
+                self.place_missing_brackets(short_ticker, trade)
 
     def resume_pending_orders(self):
         """
@@ -287,18 +287,28 @@ class TradingBot:
                 logger.info(f"[resume] Pending order {order_id} ({ticker}) status={status}")
 
                 if status == "FILLED":
-                    # Order filled during downtime  promote and place SL
+                    # Order filled during downtime  promote and place SL/TP
                     logger.info(f"[resume] {ticker} filled during restart gap. Placing SL @ ${sl_price:.4f}")
                     sl_res = self.client.place_stop_order(t212, qty, sl_price)
+                    
+                    tp_price = meta.get("tp_price")
+                    tp_res = None
+                    if tp_price and tp_price > meta.get("entry_price", 0.0):
+                        tp_res = self.client.place_limit_sell(t212, qty, float(tp_price))
+
                     if sl_res and sl_res.get('id'):
+                        sl_id = sl_res['id']
+                        tp_id = tp_res.get('id') if tp_res else None
                         self.state.setdefault("open_trades", {})[ticker] = {
                             "qty":         qty,
                             "entry_price": meta.get("entry_price", 0.0),
-                            "sl_order_id": sl_res['id'],
+                            "sl_order_id": sl_id,
                             "sl_price":    sl_price,
+                            "tp_order_id": tp_id,
+                            "tp_price":    tp_price,
                             "t212_ticker": t212
                         }
-                        logger.info(f"[resume] SL placed for {ticker}. SL ID: {sl_res['id']}")
+                        logger.info(f"[resume] Brackets placed for {ticker}. SL ID: {sl_id} " + (f"| TP ID: {tp_id}" if tp_id else ""))
                     else:
                         logger.error(f"[resume] SL FAILED for {ticker} after fill! Manual SL at ${sl_price:.4f} needed.")
                     del pending[order_id]
@@ -314,70 +324,50 @@ class TradingBot:
 
         self.save_state()
 
-    def place_missing_stop_loss(self, ticker: str, trade: dict):
+    def place_missing_brackets(self, ticker: str, trade: dict):
         """
-        Calculate and place a stop-loss for a position that was imported without one.
-
-        Stop price = the LOWER of:
-          (a) ATR-based:  entry_price - 1 * ATR   (respects real market volatility)
-          (b) Pct-based:  entry_price * (1 - stop_loss_pct)  (config floor/ceiling)
-
-        Using the lower of the two means we always give the trade at least as much
-        room as the ATR suggests, so normal intraday swings don't trigger the stop.
-        If ATR data is unavailable we fall back to the pct-based price only.
+        Calculate and place SL/TP for a position imported without them.
         """
         entry_price = trade.get('entry_price', 0.0)
         qty         = trade.get('qty', 0)
         t212_ticker = trade.get('t212_ticker', to_t212_ticker(ticker))
 
         if not entry_price or not qty:
-            logger.warning(
-                f"[{ticker}] Cannot place SL  missing entry price or qty in state."
-            )
             return
 
-        stop_pct = self.config.get('stop_loss_pct', 0.02)
-        pct_stop = round(entry_price * (1.0 - stop_pct), 4)
+        # 1. STOP LOSS
+        if not trade.get('sl_order_id'):
+            stop_pct = self.config.get('stop_loss_pct', 0.02)
+            pct_stop = round(entry_price * (1.0 - stop_pct), 4)
+            atr_stop = 0.0
+            if self.strategy:
+                atr = self.strategy.get_current_atr(ticker, multiplier=1.0)
+                if atr > 0:
+                    atr_stop = round(entry_price - atr, 4)
+            
+            stop_price = min(pct_stop, atr_stop) if atr_stop > 0 else pct_stop
+            sl_res = self.client.place_stop_order(t212_ticker, qty, stop_price)
+            if sl_res and sl_res.get('id'):
+                trade['sl_order_id'] = sl_res['id']
+                trade['sl_price']    = stop_price
+                logger.info(f"[{ticker}] Catch-up SL placed @ {stop_price:.4f}")
 
-        # Try ATR-aware stop (requires strategy to be initialised)
-        atr_stop = 0.0
-        if self.strategy:
-            atr = self.strategy.get_current_atr(ticker, multiplier=1.0)
-            if atr > 0:
-                atr_stop = round(entry_price - atr, 4)
-                logger.info(
-                    f"[{ticker}] ATR-based SL: {entry_price:.4f} - {atr:.4f} ATR = {atr_stop:.4f}"
-                )
+        # 2. TAKE PROFIT (Re-evaluate via Strategy)
+        if not trade.get('tp_order_id') and self.strategy:
+            try:
+                # Re-run analysis to get target TP
+                analysis = self.strategy.analyze(ticker)
+                target_tp = analysis.get('target_tp')
+                if target_tp and target_tp > entry_price:
+                    tp_res = self.client.place_limit_sell(t212_ticker, qty, round(float(target_tp), 4))
+                    if tp_res and tp_res.get('id'):
+                        trade['tp_order_id'] = tp_res['id']
+                        trade['tp_price']    = float(target_tp)
+                        logger.info(f"[{ticker}] Catch-up TP placed @ {target_tp:.4f}")
+            except Exception as e:
+                logger.warning(f"[{ticker}] Failed to re-evaluate TP: {e}")
 
-        # Pick the lower (wider) of the two to avoid premature stops
-        if atr_stop > 0:
-            stop_price = min(pct_stop, atr_stop)
-            method = f"ATR({atr_stop:.4f}) vs Pct({pct_stop:.4f})  chose {stop_price:.4f}"
-        else:
-            stop_price = pct_stop
-            method = f"Pct-based only ({pct_stop:.4f})  ATR unavailable"
-
-        logger.info(
-            f"[{ticker}] Placing catch-up SL | {method} | Qty={qty} t212={t212_ticker}"
-        )
-
-        sl_res = self.client.place_stop_order(
-            ticker=t212_ticker,
-            quantity=qty,
-            stop_price=stop_price
-        )
-
-        if sl_res and sl_res.get('id'):
-            sl_id = sl_res['id']
-            trade['sl_order_id'] = sl_id
-            trade['sl_price']    = stop_price
-            logger.info(f"[{ticker}] Catch-up SL placed. SL ID: {sl_id} @ ${stop_price:.4f}")
-            self.save_state()
-        else:
-            logger.error(
-                f"[{ticker}] Catch-up SL order FAILED: {sl_res}. "
-                f"MANUAL SL at ${stop_price:.4f} STRONGLY recommended!"
-            )
+        self.save_state()
 
     #  Pre-Trade Checks 
 
@@ -549,12 +539,13 @@ class TradingBot:
             "qty":          quantity,
             "entry_price":  limit_price,
             "sl_price":     stop_loss_price,
+            "tp_price":     target_tp,
         }
         self.save_state()
 
         # Poll for fill
         fill_timeout = self.config.get("order_fill_timeout_secs", 60)
-        filled = self.wait_for_fill(order_id, timeout_secs=fill_timeout)
+        filled = self.wait_for_fill(order_id, t212_ticker=t212_ticker, timeout_secs=fill_timeout)
 
         if filled:
             sl_res = self.client.place_stop_order(
@@ -600,7 +591,7 @@ class TradingBot:
                 f"Order remains live on exchange. SL will be placed on next restart or when fill is confirmed."
             )
 
-    def wait_for_fill(self, order_id: int, timeout_secs: int = 60) -> bool:
+    def wait_for_fill(self, order_id: int, t212_ticker: str = None, timeout_secs: int = 60) -> bool:
         """
         Poll the API until the order is FILLED or the timeout is reached.
         Returns True if filled, False otherwise.
@@ -616,6 +607,14 @@ class TradingBot:
                 if status in ("CANCELLED", "REJECTED", "EXPIRED"):
                     logger.warning(f"[fill] Order {order_id} stopped with status: {status}")
                     return False
+                
+                # If API returned {} (like on a 404 due to eventual consistency or moving to history)
+                if not order and t212_ticker:
+                    positions = self.client.get_open_positions()
+                    for p in positions:
+                        if p.get('ticker') == t212_ticker and p.get('quantity', 0) > 0:
+                            logger.info(f"[fill] Order {order_id} assumed filled (position exists).")
+                            return True
                 # Still working...
             except Exception as e:
                 logger.error(f"[fill] Error polling order {order_id}: {e}")

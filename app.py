@@ -389,19 +389,27 @@ def show_settings():
             except Exception: pass
         
         health_data = state_data.get("ticker_health", {})
-        paused_tickers = {k: v for k, v in health_data.items() if v.get("is_paused")}
+        unhealthy_tickers = {k: v for k, v in health_data.items() if v.get("error_count", 0) > 0}
         
-        if paused_tickers:
-            for ticker, info in paused_tickers.items():
+        if unhealthy_tickers:
+            for ticker, info in unhealthy_tickers.items():
+                is_paused = info.get("is_paused", False)
                 with st.container(border=True):
                     hc1, hc2 = st.columns([3, 1])
-                    hc1.markdown(f"**{ticker}** (Errors: `{info.get('error_count')}`)")
-                    hc1.caption(f"Last error: `{info.get('last_error')}`")
-                    if hc2.button("♻️ Resume", key=f"resume_{ticker}", use_container_width=True):
-                        info["is_paused"] = False
-                        info["error_count"] = 0
-                        with open(state_path, "w") as f: json.dump(state_data, f, indent=4)
-                        st.rerun()
+                    status_lbl = "🚨 PAUSED" if is_paused else f"⚠️ AT RISK ({info.get('error_count')}/3)"
+                    hc1.markdown(f"**{status_lbl} - {ticker}**")
+                    hc1.caption(f"Last error: `{info.get('last_error', 'N/A')}`")
+                    if is_paused:
+                        if hc2.button("♻️ Resume", key=f"resume_{ticker}", use_container_width=True):
+                            info["is_paused"] = False
+                            info["error_count"] = 0
+                            with open(state_path, "w") as f: json.dump(state_data, f, indent=4)
+                            st.rerun()
+                    else:
+                        if hc2.button("🧹 Clear", key=f"clear_{ticker}", use_container_width=True):
+                            info["error_count"] = 0
+                            with open(state_path, "w") as f: json.dump(state_data, f, indent=4)
+                            st.rerun()
         else:
             st.success("✅ All active tickers are healthy.")
 
@@ -600,6 +608,31 @@ st.markdown(
     f"&nbsp;·&nbsp; `{api_mode}` mode &nbsp;·&nbsp; {ai_status}",
     unsafe_allow_html=True,
 )
+
+# ── Priority Alerts ───────────────────────────────────────────────────────
+bot_log_path = Path("logs/bot.log")
+if bot_log_path.exists():
+    try:
+        with open(bot_log_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()[-1000:]
+        alerts = []
+        now = datetime.datetime.now()
+        for line in reversed(lines):
+            if " - ERROR - " in line or " - CRITICAL - " in line:
+                try:
+                    ts = datetime.datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+                    if (now - ts).total_seconds() < 86400:
+                        alerts.append(line.strip())
+                except:
+                    pass
+            if len(alerts) >= 5:
+                break
+        if alerts:
+            st.error("### 🚨 High-Priority Activity Alerts (Last 24h)")
+            for alert in alerts:
+                st.write(f"`{alert}`")
+    except Exception:
+        pass
 
 # ── Metrics ───────────────────────────────────────────────────────────────
 m1, m2, m3, m4 = st.columns(4)
