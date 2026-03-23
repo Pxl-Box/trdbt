@@ -178,7 +178,13 @@ class MeanReversionStrategy:
                     f"[{ticker}] Volume too low ({latest['Volume']:.0f} < "
                     f"{avg_volume * min_vol_pct:.0f} = {min_vol_pct*100:.0f}% of avg). Skipping signal."
                 )
-                return {"signal": "WAIT", "price": current_price, "reason": f"Low volume – no conviction {diag}"}
+                target_tp = basis if self.tp_target_mode != "Upper Band" else upper_band
+                return {
+                    "signal": "WAIT",
+                    "price": current_price,
+                    "target_tp": target_tp,
+                    "reason": f"Low volume – no conviction {diag}"
+                }
 
         # --- AI ML Inference (Node 3 Execution) ---
         ai_win_prob = 0.50

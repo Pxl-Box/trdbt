@@ -160,7 +160,7 @@ class Trading212Client:
             "ticker": ticker,
             "quantity": -abs(quantity),            # negative = SELL
             "limitPrice": round(limit_price, 4),
-            "timeValidity": "GTC"
+            "timeValidity": "DAY"
         }
         return self._post("/equity/orders/limit", payload)
 
