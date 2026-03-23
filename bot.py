@@ -55,6 +55,12 @@ def to_t212_ticker(ticker: str) -> str:
     if ticker.endswith(".XC"): return f"{ticker.replace('.XC', '')}_DE_EQ"
     if ticker.endswith(".L"):  return f"{ticker.replace('.L', '')}_UK_EQ"
     
+    # US Equities/ETFs
+    # Heuristic: Most US ETFs on T212 use _US_ETF suffix
+    _US_ETFS = {"GDX", "GLD", "SLV", "ARKK", "VUSA", "QQQ", "SPY", "XLE", "XLK", "ICLN", "IBIT", "FBTC"}
+    if ticker in _US_ETFS:
+        return f"{ticker}_US_ETF"
+    
     return f"{ticker}_US_EQ"
 
 #  Constants 
@@ -595,37 +601,39 @@ class TradingBot:
                 f"Order remains live on exchange. SL will be placed on next restart or when fill is confirmed."
             )
 
-    def wait_for_fill(self, order_id: int, t212_ticker: str = None, timeout_secs: int = 60) -> bool:
+    def wait_for_fill(self, order_id: int, ticker: str = None, timeout_secs: int = 60) -> bool:
         """
         Poll the API until the order is FILLED or the timeout is reached.
         Returns True if filled, False otherwise.
         """
         start_t = time.time()
+        t212_ticker = to_t212_ticker(ticker) if ticker else None
+        
         while (time.time() - start_t) < timeout_secs:
             try:
+                # 1. Position Check (most robust against eventual consistency 404s)
+                if t212_ticker:
+                    positions = self.client.get_open_positions()
+                    if any(p.get('ticker') == t212_ticker for p in positions):
+                        logger.info(f"[{ticker}] Fill confirmed via position check.")
+                        return True
+                
+                # 2. Order Status Check (fallback)
                 order = self.client.get_order_by_id(order_id)
                 status = order.get("status", "").upper()
                 if status == "FILLED":
-                    logger.info(f"[fill] Order {order_id} filled.")
+                    logger.info(f"[{ticker}] Fill confirmed via order status FILLED.")
                     return True
-                if status in ("CANCELLED", "REJECTED", "EXPIRED"):
-                    logger.warning(f"[fill] Order {order_id} stopped with status: {status}")
+                elif status in ("REJECTED", "CANCELLED", "EXPIRED"):
+                    logger.warning(f"[{ticker}] Order {status} during fill-wait.")
                     return False
                 
-                # If API returned {} (like on a 404 due to eventual consistency or moving to history)
-                if not order and t212_ticker:
-                    positions = self.client.get_open_positions()
-                    for p in positions:
-                        if p.get('ticker') == t212_ticker and p.get('quantity', 0) > 0:
-                            logger.info(f"[fill] Order {order_id} assumed filled (position exists).")
-                            return True
-                # Still working...
             except Exception as e:
-                logger.error(f"[fill] Error polling order {order_id}: {e}")
+                logger.error(f"[fill] Error polling order {order_id} ({ticker}): {e}")
 
             time.sleep(FILL_POLL_INTERVAL)
 
-        logger.warning(f"[fill] Timeout waiting for order {order_id} to fill.")
+        logger.warning(f"[fill] Timeout waiting for order {order_id} ({ticker}) to fill.")
         return False
 
     def handle_sell(self, ticker: str):
@@ -881,15 +889,16 @@ class TradingBot:
                 # Step 2: Market sell to lock profit
                 res = self.client.place_market_sell(t212_ticker, qty)
                 if res and res.get('id'):
-                    logger.info(f"[vTP] {ticker} Market SELL submitted @ ~{current_price:.4f}. ID: {res['id']}")
-                    del open_trades[ticker]
+                    logger.info(f"[vTP] {ticker} Market SELL submitted. ID: {res['id']}")
+                    # Only remove from open_trades and add to cooldowns on success
+                    del self.state["open_trades"][ticker]
                     self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
                     self.save_state()
+                    logger.info(f"[vTP] {ticker} position closed via Take Profit. Ticker on cooldown.")
                 else:
-                    logger.error(
-                        f"[vTP] {ticker} Market SELL FAILED after TP trigger: {res}. "
-                        f"MANUAL ACTION REQUIRED! SL may have been cancelled."
-                    )
+                    logger.error(f"[vTP] {ticker} Market SELL FAILED after TP trigger: {res}. MANUAL ACTION REQUIRED! SL may have been cancelled.")
+                    # We do NOT remove it from state here, so the next heartbeat can try again 
+                    # (though SL is gone, so user really should check).
 
     #  Signal Scoring 
 

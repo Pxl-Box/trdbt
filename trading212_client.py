@@ -50,10 +50,21 @@ class Trading212Client:
         """
         url = f"{self.base_url}{endpoint}"
         last_exc = None
+
+        # Mandatory Request Pacing: Stay under 50 req/min (0.83 req/s)
+        # 1.5s delay = 40 req/min max. Guaranteed to stay safe.
+        time.sleep(1.5)
+
         for attempt in range(1, self.max_retries + 1):
             try:
                 resp = requests.request(method, url, headers=self.headers,
                                         timeout=10, **kwargs)
+                
+                # Check for rate limit headers for visibility
+                rem = resp.headers.get("x-ratelimit-remaining")
+                if rem:
+                    logger.debug(f"[API] {method} {endpoint} | Limit remaining: {rem}")
+
                 if resp.status_code in _RETRY_STATUSES and attempt < self.max_retries:
                     wait = self.retry_delay * (2 ** (attempt - 1))
                     logger.warning(
@@ -128,7 +139,7 @@ class Trading212Client:
         """
         payload = {
             "ticker": ticker,
-            "quantity": quantity,                  # positive = BUY
+            "quantity": round(float(quantity), 2),  # positive = BUY, T212 max precision = 2
             "limitPrice": round(limit_price, 4),
             "timeValidity": "DAY"
         }
@@ -143,7 +154,7 @@ class Trading212Client:
         """
         payload = {
             "ticker": ticker,
-            "quantity": -abs(quantity),            # negative = SELL
+            "quantity": -abs(round(float(quantity), 2)),  # negative = SELL
             "stopPrice": round(stop_price, 4),
             "timeValidity": "DAY"
         }
@@ -158,7 +169,7 @@ class Trading212Client:
         """
         payload = {
             "ticker": ticker,
-            "quantity": -abs(quantity),            # negative = SELL
+            "quantity": -abs(round(float(quantity), 2)),  # negative = SELL
             "limitPrice": round(limit_price, 4),
             "timeValidity": "DAY"
         }
@@ -172,8 +183,7 @@ class Trading212Client:
         """
         payload = {
             "ticker": ticker,
-            "quantity": -abs(quantity),            # negative = SELL
-            "timeValidity": "DAY"
+            "quantity": -abs(round(float(quantity), 2))   # Market orders do NOT support timeValidity
         }
         return self._post("/equity/orders/market", payload)
 
