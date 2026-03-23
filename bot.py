@@ -890,6 +890,25 @@ class TradingBot:
                 res = self.client.place_market_sell(t212_ticker, qty)
                 if res and res.get('id'):
                     logger.info(f"[vTP] {ticker} Market SELL submitted. ID: {res['id']}")
+                    # Record Realised P&L for dashboard tracking
+                    try:
+                        _ent = float(trade.get("entry_price", 0))
+                        _qt  = float(qty)
+                        # _tp_price is available from the enclosing loop
+                        _rpnl = round((_tp_price - _ent) * _qt, 4) if _ent > 0 else 0.0
+                        self.state.setdefault("realised_pnl", []).append({
+                            "ticker":    ticker,
+                            "pnl":       _rpnl,
+                            "entry":     round(_ent, 4),
+                            "exit":      round(_tp_price, 4),
+                            "qty":       _qt,
+                            "reason":    "Virtual TP",
+                            "closed_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                        logger.info(f"[vTP] Realised P&L: {ticker} -> £{_rpnl:+.4f}")
+                    except Exception as _pnl_err:
+                        logger.warning(f"[vTP] P&L recording failed: {_pnl_err}")
+
                     # Only remove from open_trades and add to cooldowns on success
                     del self.state["open_trades"][ticker]
                     self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
