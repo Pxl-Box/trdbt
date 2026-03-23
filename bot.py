@@ -253,9 +253,8 @@ class TradingBot:
         if imported or stale:
             self.save_state()
 
-        # Place brackets for any newly imported positions that don't have them
-        for short_ticker in [s.split(' ')[0] for s in imported]:
-            trade = open_trades.get(short_ticker)
+        # Place brackets for any trades that don't have them
+        for short_ticker, trade in open_trades.items():
             if trade and (trade.get('sl_order_id') is None or trade.get('tp_order_id') is None):
                 self.place_missing_brackets(short_ticker, trade)
 
