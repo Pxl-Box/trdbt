@@ -339,7 +339,9 @@ class TradingBot:
 
     def place_missing_brackets(self, ticker: str, trade: dict):
         """
-        Calculate and place SL/TP for a position imported without them.
+        Calculate and place SL for a position imported without one.
+        Take Profit is stored as a virtual target only (T212 reserves shares
+        for the first sell order, making a second standalone sell impossible).
         """
         entry_price = trade.get('entry_price', 0.0)
         qty         = trade.get('qty', 0)
@@ -348,7 +350,7 @@ class TradingBot:
         if not entry_price or not qty:
             return
 
-        # 1. STOP LOSS
+        # 1. STOP LOSS (physical order on exchange)
         if not trade.get('sl_order_id'):
             stop_pct = self.config.get('stop_loss_pct', 0.02)
             pct_stop = round(entry_price * (1.0 - stop_pct), 4)
@@ -365,27 +367,18 @@ class TradingBot:
                 trade['sl_price']    = stop_price
                 logger.info(f"[{ticker}] Catch-up SL placed @ {stop_price:.4f}")
 
-        # 2. TAKE PROFIT (Re-evaluate via Strategy)
-        if not trade.get('tp_order_id') and self.strategy:
+        # 2. TAKE PROFIT (virtual — stored locally, monitored by check_virtual_tp)
+        # T212 reserves shares for the SL order, preventing a second sell order.
+        if not trade.get('tp_price') and self.strategy:
             try:
-                # Re-run analysis to get target TP
                 analysis = self.strategy.analyze(ticker)
                 target_tp = analysis.get('target_tp')
-                
-                # If target_tp is missing or below entry, use a default 1.5% profit target for recovery
                 if not target_tp or target_tp <= entry_price:
                     target_tp = entry_price * 1.015
-                    logger.info(f"[{ticker}] Strategy TP ({target_tp:.4f}) below entry or missing. Using 1.5% recovery target.")
-
-                tp_res = self.client.place_limit_sell(t212_ticker, qty, round(float(target_tp), 4))
-                if tp_res and tp_res.get('id'):
-                    trade['tp_order_id'] = tp_res['id']
-                    trade['tp_price']    = float(target_tp)
-                    logger.info(f"[{ticker}] Catch-up TP placed @ {target_tp:.4f}")
-                else:
-                    logger.warning(f"[{ticker}] Catch-up TP placement FAILED: {tp_res}")
+                trade['tp_price'] = round(float(target_tp), 4)
+                logger.info(f"[{ticker}] Virtual TP target set @ {trade['tp_price']:.4f} (monitored by bot)")
             except Exception as e:
-                logger.warning(f"[{ticker}] Failed to re-evaluate TP: {e}")
+                logger.warning(f"[{ticker}] Failed to set virtual TP target: {e}")
 
         self.save_state()
 
@@ -573,29 +566,20 @@ class TradingBot:
                 quantity=quantity,
                 stop_price=stop_loss_price
             )
-            tp_res = None
-            if target_tp and target_tp > limit_price:
-                tp_res = self.client.place_limit_sell(
-                    ticker=t212_ticker,
-                    quantity=quantity,
-                    limit_price=round(float(target_tp), 4)
-                )
 
             if sl_res and sl_res.get('id'):
                 sl_id = sl_res['id']
-                tp_id = tp_res.get('id') if tp_res else None
                 logger.info(
-                    f"[{ticker}] SL placed @ {stop_loss_price:.4f} (ID: {sl_id})"
-                    + (f" | TP placed @ {target_tp:.4f} (ID: {tp_id})" if tp_id else "")
+                    f"[{ticker}] SL placed @ {stop_loss_price:.4f} (ID: {sl_id}) | "
+                    f"Virtual TP target: {target_tp:.4f} (bot-monitored, 60s heartbeat)"
                 )
                 # Promote from pending to open_trades
                 self.state.setdefault("open_trades", {})[ticker] = {
                     "qty":          quantity,
                     "entry_price":  limit_price,
-                    "sl_order_id": sl_id,
+                    "sl_order_id":  sl_id,
                     "sl_price":     stop_loss_price,
-                    "tp_order_id": tp_id,
-                    "tp_price":     float(target_tp) if target_tp else None,
+                    "tp_price":     float(target_tp) if target_tp else None,  # Virtual TP
                     "t212_ticker":  t212_ticker
                 }
                 self.state.get("pending_orders", {}).pop(str(order_id), None)
@@ -845,6 +829,67 @@ class TradingBot:
 
         if changed:
             self.save_state()
+
+    #  Virtual Take Profit Monitor 
+
+    def check_virtual_tp(self, open_positions: list):
+        """
+        Virtual Take Profit monitor - runs every 60 seconds in the heartbeat loop.
+
+        T212 reserves shares for the physical Stop Loss order, preventing a second
+        standalone sell order. Instead, the bot tracks a 'tp_price' locally and
+        monitors it here. When the live price >= tp_price, the bot:
+          1. Cancels the physical Stop Loss (to free up the reserved shares)
+          2. Executes a Market Sell to lock in the profit
+        """
+        open_trades = self.state.get("open_trades", {})
+        if not open_trades:
+            return
+
+        live_by_t212 = {p.get('ticker'): p for p in open_positions}
+
+        for ticker, trade in list(open_trades.items()):
+            tp_price    = trade.get('tp_price')
+            sl_order_id = trade.get('sl_order_id')
+            t212_ticker = trade.get('t212_ticker', to_t212_ticker(ticker))
+            qty         = trade.get('qty', 0)
+
+            if not tp_price or not qty:
+                continue
+
+            # Get current price from live positions
+            pos = live_by_t212.get(t212_ticker)
+            if not pos:
+                continue
+            current_price = pos.get('currentPrice') or pos.get('averagePrice', 0.0)
+            if not current_price:
+                continue
+
+            if current_price >= tp_price:
+                logger.info(
+                    f"[vTP] {ticker} price {current_price:.4f} >= target {tp_price:.4f}. "
+                    f"Triggering Virtual Take Profit!"
+                )
+                # Step 1: Cancel physical SL to free up reserved shares
+                if sl_order_id:
+                    cancelled = self.client.cancel_order(sl_order_id)
+                    if cancelled:
+                        logger.info(f"[vTP] {ticker} Physical SL {sl_order_id} cancelled.")
+                    else:
+                        logger.warning(f"[vTP] {ticker} Could not cancel SL {sl_order_id}. Attempting sell anyway.")
+
+                # Step 2: Market sell to lock profit
+                res = self.client.place_market_sell(t212_ticker, qty)
+                if res and res.get('id'):
+                    logger.info(f"[vTP] {ticker} Market SELL submitted @ ~{current_price:.4f}. ID: {res['id']}")
+                    del open_trades[ticker]
+                    self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
+                    self.save_state()
+                else:
+                    logger.error(
+                        f"[vTP] {ticker} Market SELL FAILED after TP trigger: {res}. "
+                        f"MANUAL ACTION REQUIRED! SL may have been cancelled."
+                    )
 
     #  Signal Scoring 
 
@@ -1112,9 +1157,21 @@ class TradingBot:
             for handler in logging.root.handlers:
                 handler.flush()
 
-            interval = self.config.get("cycle_interval_secs", 900)  # default 15 min = matches 15m candles
+            interval = self.config.get("cycle_interval_secs", 900)  # default 15 min
             logger.info(f"Next cycle in {interval}s ({interval//60}m {interval%60}s).")
-            time.sleep(interval)
+
+            # Heartbeat: check Virtual TPs every 60s within the wait period
+            heartbeat_secs = 60
+            elapsed = 0
+            while elapsed < interval:
+                time.sleep(heartbeat_secs)
+                elapsed += heartbeat_secs
+                if elapsed < interval:  # skip the last check (full cycle does it)
+                    try:
+                        positions = self.client.get_open_positions()
+                        self.check_virtual_tp(positions)
+                    except Exception as e:
+                        logger.warning(f"[heartbeat] Virtual TP check failed: {e}")
 
 
 if __name__ == "__main__":
