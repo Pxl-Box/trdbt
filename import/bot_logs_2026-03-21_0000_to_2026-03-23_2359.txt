@@ -1,0 +1,14 @@
+2026-03-21 21:27:35,332 - quant_inference - INFO - [Quant] Successfully loaded AI Brain from trained_models/ai_brain_v1.pkl
+2026-03-21 21:27:35,333 - bot - INFO - Trading Bot Daemon Started.
+2026-03-21 21:27:35,334 - bot - WARNING - Bot is RUNNING but API credentials are missing.
+2026-03-21 21:27:35,334 - bot - INFO - Next cycle in 900s (15m 0s).
+2026-03-21 21:42:35,336 - bot - WARNING - Bot is RUNNING but API credentials are missing.
+2026-03-21 21:42:35,337 - bot - INFO - Next cycle in 900s (15m 0s).
+2026-03-21 21:57:35,339 - bot - WARNING - Bot is RUNNING but API credentials are missing.
+2026-03-21 21:57:35,339 - bot - INFO - Next cycle in 900s (15m 0s).
+2026-03-21 22:12:35,340 - bot - WARNING - Bot is RUNNING but API credentials are missing.
+2026-03-21 22:12:35,341 - bot - INFO - Next cycle in 900s (15m 0s).
+2026-03-21 22:27:35,341 - bot - WARNING - Bot is RUNNING but API credentials are missing.
+2026-03-21 22:27:35,342 - bot - INFO - Next cycle in 900s (15m 0s).
+2026-03-21 22:42:35,343 - bot - WARNING - Bot is RUNNING but API credentials are missing.
+2026-03-21 22:42:35,344 - bot - INFO - Next cycle in 900s (15m 0s).

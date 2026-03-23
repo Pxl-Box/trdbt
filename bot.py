@@ -454,7 +454,8 @@ class TradingBot:
             return True
         return False
 
-    #  Order Execution     def handle_buy(self, ticker: str, signal_data: dict, available_capital: float):
+    #  Order Execution 
+    def handle_buy(self, ticker: str, signal_data: dict, available_capital: float):
         """
         Places a limit BUY order for the given ticker using a fixed-risk sizing model.
         Stop-loss: ATR-based (entry - sl_atr_multiplier * ATR).
@@ -949,6 +950,11 @@ class TradingBot:
                     benchmarks_1d=benchmark_dfs_1d,
                     benchmarks_15m=benchmark_dfs_15m
                 )
+                
+                # Treat 'NEUTRAL' signals (which represent NaN/no data) as analysis errors 
+                # so they increment error_count and get paused if persistent.
+                if signal_data.get("signal") == "NEUTRAL":
+                    raise ValueError(f"Invalid data or calculation failed: {signal_data.get('reason', 'Unknown')}")
                 
                 # [AI Visibility] Log the win probability for the user dashboard
                 ai_prob = signal_data.get('ai_win_prob')
