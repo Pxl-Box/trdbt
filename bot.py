@@ -190,7 +190,7 @@ class TradingBot:
 
     #  Position Reconciliation 
 
-    def sync_open_trades(self, open_positions: list):
+    def sync_open_trades(self, open_positions: list, active_orders: list):
         """
         Reconcile local open_trades state against the live API positions.
 
@@ -253,8 +253,22 @@ class TradingBot:
         if imported or stale:
             self.save_state()
 
-        # Place brackets for any trades that don't have them
+        # Verify that any tracked SL/TP IDs are actually live on the exchange
+        live_orders_by_id = {str(o.get('id')): o for o in active_orders}
         for short_ticker, trade in open_trades.items():
+            # Check SL
+            sl_id = trade.get('sl_order_id')
+            if sl_id and str(sl_id) not in live_orders_by_id:
+                logger.warning(f"[{short_ticker}] Tracked SL {sl_id} not found on exchange. Clearing for fresh placement.")
+                trade['sl_order_id'] = None
+                
+            # Check TP
+            tp_id = trade.get('tp_order_id')
+            if tp_id and str(tp_id) not in live_orders_by_id:
+                logger.warning(f"[{short_ticker}] Tracked TP {tp_id} not found on exchange. Clearing for fresh placement.")
+                trade['tp_order_id'] = None
+
+            # Place brackets for any trades that don't have them
             if trade and (trade.get('sl_order_id') is None or trade.get('tp_order_id') is None):
                 self.place_missing_brackets(short_ticker, trade)
 
@@ -897,7 +911,7 @@ class TradingBot:
         )
 
         # 3. Reconcile live positions
-        self.sync_open_trades(open_positions)
+        self.sync_open_trades(open_positions, active_orders)
         # 3b. Resume pending orders from previous run
         self.resume_pending_orders()
         # 3c. Trailing stop-loss bump
