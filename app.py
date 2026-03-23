@@ -717,6 +717,17 @@ else:
 
 st.markdown("---")
 
+# ── Load bot state for SL / virtual TP data ──────────────────────────────
+def load_bot_state():
+    try:
+        with open("bot_state.json", "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+bot_state = load_bot_state()
+open_trades_state = bot_state.get("open_trades", {})  # ticker -> {sl_price, tp_price, qty, entry_price}
+
 # ── Open positions ────────────────────────────────────────────────────────
 st.markdown('<div class="section-title">Open Positions</div>', unsafe_allow_html=True)
 if client:
@@ -724,11 +735,26 @@ if client:
         positions = client.get_open_positions()
         if positions and isinstance(positions, list):
             import pandas as pd
-            df = pd.DataFrame(positions)
-            priority = ["ticker", "quantity", "averagePrice", "currentPrice", "ppl", "fxPpl"]
-            cols = [c for c in priority if c in df.columns] + \
-                   [c for c in df.columns if c not in priority]
-            st.dataframe(df[cols], use_container_width=True, height=250)
+
+            rows = []
+            for p in positions:
+                t212 = p.get("ticker", "")
+                # Strip suffix to match bot state key
+                short = t212.replace("_US_EQ", "").replace("_US_ETF", "")
+                trade = open_trades_state.get(short, open_trades_state.get(t212, {}))
+
+                rows.append({
+                    "Ticker":           t212,
+                    "Qty":              p.get("quantity", ""),
+                    "Avg Entry":        f"£{float(p.get('averagePrice', 0)):.4f}",
+                    "Current Price":    f"£{float(p.get('currentPrice', 0)):.4f}",
+                    "P/L":              f"£{float(p.get('ppl', 0)):.2f}",
+                    "🔴 Stop Loss":     f"£{float(trade['sl_price']):.4f}" if trade.get('sl_price') else "—",
+                    "🎯 Take Profit":   f"£{float(trade['tp_price']):.4f}" if trade.get('tp_price') else "—",
+                })
+
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=True, height=250, hide_index=True)
         else:
             st.info("No open positions found.")
     except Exception as e:
@@ -736,15 +762,77 @@ if client:
 else:
     st.info("No API key set. Open ⚙️ Settings → API & Control to add your key.")
 
+st.markdown("---")
+
+# ── Bot-Managed Brackets (SL / Virtual TP) ───────────────────────────────
+st.markdown('<div class="section-title">Bot-Managed Brackets</div>', unsafe_allow_html=True)
+if open_trades_state:
+    import pandas as pd
+    sl_rows = []
+    tp_rows = []
+    for ticker, trade in open_trades_state.items():
+        sl_price = trade.get("sl_price")
+        tp_price = trade.get("tp_price")
+        entry    = trade.get("entry_price", 0)
+        qty      = trade.get("qty", "?")
+
+        if sl_price:
+            sl_rows.append({
+                "Ticker":       ticker,
+                "Qty":          qty,
+                "Entry":        f"£{float(entry):.4f}",
+                "Stop Loss $":  f"£{float(sl_price):.4f}",
+                "Downside":     f"{((float(sl_price) - float(entry)) / float(entry) * 100):.2f}%" if entry else "—",
+                "SL Order ID":  trade.get("sl_order_id", "—"),
+            })
+        if tp_price:
+            tp_rows.append({
+                "Ticker":           ticker,
+                "Qty":              qty,
+                "Entry":            f"£{float(entry):.4f}",
+                "Take Profit $":    f"£{float(tp_price):.4f}",
+                "Upside":           f"{((float(tp_price) - float(entry)) / float(entry) * 100):.2f}%" if entry else "—",
+                "Type":             "🤖 Virtual (60s heartbeat)",
+            })
+
+    bc1, bc2 = st.columns(2)
+    with bc1:
+        st.markdown("**🔴 Stop Loss Orders**")
+        if sl_rows:
+            st.dataframe(pd.DataFrame(sl_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No tracked stop losses.")
+    with bc2:
+        st.markdown("**🎯 Virtual Take Profit Targets**")
+        if tp_rows:
+            st.dataframe(pd.DataFrame(tp_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No virtual TPs set.")
+else:
+    st.info("Bot state file has no tracked trades.")
+
+st.markdown("---")
+
 # ── Pending orders ────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">Pending Orders</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">Active Exchange Orders</div>', unsafe_allow_html=True)
 if client:
     try:
         orders = client.get_active_orders()
         if orders and isinstance(orders, list):
             import pandas as pd
-            st.dataframe(pd.DataFrame(orders), use_container_width=True, height=200)
+            df_orders = pd.DataFrame(orders)
+            # Rename columns for clarity if they exist
+            rename_map = {
+                "ticker": "Ticker",
+                "quantity": "Qty",
+                "stopPrice": "Stop Price",
+                "limitPrice": "Limit Price",
+                "status": "Status",
+                "type": "Type",
+            }
+            df_orders.rename(columns={k: v for k, v in rename_map.items() if k in df_orders.columns}, inplace=True)
+            st.dataframe(df_orders, use_container_width=True, height=200, hide_index=True)
         else:
-            st.info("No pending orders.")
+            st.info("No pending orders on the exchange.")
     except Exception as e:
         st.warning(f"Could not load orders: {e}")
