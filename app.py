@@ -64,6 +64,16 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: .08em;
     }
+    .pos-card{background:#1e1e2e;border-radius:14px;padding:18px 22px;margin-bottom:14px;border-left:4px solid #6c63ff;}
+    .pos-ticker{font-size:1.2rem;font-weight:700;color:#e2e8f0;}
+    .pos-sub{font-size:0.82rem;color:#a0aec0;margin-top:2px;}
+    .pos-row{display:flex;gap:28px;margin-top:12px;flex-wrap:wrap;}
+    .pos-item{display:flex;flex-direction:column;}
+    .pos-label{font-size:0.72rem;color:#718096;text-transform:uppercase;letter-spacing:.06em;}
+    .pos-value{font-size:1.05rem;font-weight:600;color:#e2e8f0;}
+    .pnl-pos{color:#68d391!important;}
+    .pnl-neg{color:#fc8181!important;}
+    .pnl-banner{background:#1a202c;border-radius:12px;padding:16px 22px;margin-bottom:16px;border:1px solid #2d3748;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -725,28 +735,6 @@ def get_market_regime():
 regime_label, regime_detail = get_market_regime()
 st.markdown(f"### {regime_label}")
 st.caption(regime_detail)
-
-# ── Realised P&L Table ───────────────────────────────────────────────────
-st.markdown('<div class="section-title">Realised P&L (Closed Trades) History</div>', unsafe_allow_html=True)
-if realised_pnl_st:
-    import pandas as pd
-    cls   = "pnl-pos" if total_realised >= 0 else "pnl-neg"
-    sign  = "+" if total_realised >= 0 else ""
-    st.markdown(f"""<div class="pnl-banner">
-        <span style="font-size:.85rem;color:#718096;text-transform:uppercase;letter-spacing:.06em;">Total Closed P&L</span><br>
-        <span class="{cls}" style="font-size:1.8rem;font-weight:700;">{sign}£{total_realised:.2f}</span>
-        &nbsp;<span style="color:#718096;font-size:.85rem;">across {len(realised_pnl_st)} trade(s)</span>
-    </div>""", unsafe_allow_html=True)
-    df_pnl = pd.DataFrame(realised_pnl_st)
-    if "pnl" in df_pnl.columns:
-        df_pnl["pnl"] = df_pnl["pnl"].apply(lambda x: f"£{float(x):+.2f}")
-    st.dataframe(df_pnl, use_container_width=True, height=180, hide_index=True)
-else:
-    st.info("No closed trades recorded yet.")
-
-st.markdown("---")
-
-# ... (Handled by sections above)
 
 st.markdown("---")
 
