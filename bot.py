@@ -351,13 +351,25 @@ class TradingBot:
         for order_id, meta in list(pending.items()):
             try:
                 order   = self.client.get_order_by_id(order_id)
-                status  = order.get("status", "").upper()
+                status  = order.get("status", "")
+                
+                # If status is an int or error dict, it's an API error, not a trade status
+                if not isinstance(status, str):
+                    if order.get("_status_code") == 404:
+                        logger.warning(f"[resume] Order {order_id} not found on exchange. Cleaning up.")
+                        pending.pop(str(order_id), None)
+                        continue
+                    else:
+                        logger.error(f"[resume] Unexpected API response for order {order_id}: {order}")
+                        continue
+
+                status_upper = status.upper()
                 ticker  = meta.get("ticker", "?")
                 t212    = meta.get("t212_ticker", ticker)
                 qty     = meta.get("qty", 0)
                 sl_price= meta.get("sl_price", 0.0)
 
-                logger.info(f"[resume] Pending order {order_id} ({ticker}) status={status}")
+                logger.info(f"[resume] Pending order {order_id} ({ticker}) status={status_upper}")
 
                 if status == "FILLED":
                     # Order filled during downtime  promote and place SL/TP
