@@ -35,5 +35,7 @@
     "ml_model_path": "trained_models/ai_brain_v1.pkl",
     "max_trade_duration_hours": 48,
     "dynamic_tp_enabled": true,
-    "breakeven_buffer_pct": 0.002
+    "breakeven_buffer_pct": 0.002,
+    "order_chase_enabled": true,
+    "max_chase_slippage_pct": 0.005
 }

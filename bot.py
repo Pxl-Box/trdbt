@@ -8,6 +8,7 @@ from pathlib import Path
 from strategy import MeanReversionStrategy
 from trading212_client import Trading212Client
 from quant_inference import QuantInference
+import yfinance as yf
 
 #  Logging Setup 
 # Logs rotate daily in the logs/ subfolder, 30 days retained.
@@ -408,6 +409,102 @@ class TradingBot:
                 logger.error(f"[resume] Error checking pending order {order_id}: {e}")
 
         self.save_state()
+
+    def check_pending_orders_chase(self):
+        """
+        Heartbeat-driven order chaser.
+        Checks if a pending BUY limit order is being 'left behind' by a rising stock.
+        If the gap is > 0 but <= max_chase_slippage_pct, cancel and re-submit at current price.
+        """
+        if not self.config.get("order_chase_enabled", False):
+            return
+
+        pending = self.state.get("pending_orders", {})
+        if not pending:
+            return
+
+        max_slippage = self.config.get("max_chase_slippage_pct", 0.005)
+        
+        # Batch fetch symbols
+        tickers_to_check = []
+        order_map = {} # ticker_short -> order_id
+        for oid, meta in pending.items():
+            ticker_short = meta.get("ticker", "").split("_")[0]
+            if ticker_short:
+                tickers_to_check.append(ticker_short)
+                order_map[ticker_short] = oid
+
+        if not tickers_to_check:
+            return
+
+        try:
+            # period '1d' interval '1m' is the fastest way to get 'live-ish' price
+            data = yf.download(tickers_to_check, period="1d", interval="1m", progress=False)
+            if data.empty:
+                return
+
+            for symbol in tickers_to_check:
+                order_id = order_map[symbol]
+                meta = pending[order_id]
+                
+                # Handle single vs multi-ticker DF
+                if len(tickers_to_check) > 1:
+                    if symbol not in data['Close']: continue
+                    current_price = float(data['Close'][symbol].dropna().iloc[-1])
+                else:
+                    current_price = float(data['Close'].dropna().iloc[-1])
+
+                limit_price = meta.get("limit_price") or meta.get("entry_price") or meta.get("price")
+                if not limit_price or not current_price:
+                    continue
+
+                slippage = (current_price - limit_price) / limit_price
+                
+                # Rule: If stock is rising AWAY from our limit, but still within 0.5%
+                if 0 < slippage <= max_slippage:
+                    ticker_full = meta.get("ticker")
+                    t212_ticker = meta.get("t212_ticker", ticker_full)
+                    qty         = meta.get("qty")
+                    sl_price    = meta.get("sl_price")
+                    tp_price    = meta.get("tp_price")
+
+                    logger.info(
+                        f"[chase] {ticker_full} moving away (Slippage: {slippage*100:.2f}%). "
+                        f"Limit: {limit_price:.2f} | Current: {current_price:.2f}. CHASING..."
+                    )
+
+                    # 1. Cancel old
+                    if self.client.cancel_order(order_id):
+                        # 2. Place new at current price
+                        res = self.client.place_limit_order(t212_ticker, qty, current_price)
+                        if res and res.get('id'):
+                            new_id = str(res['id'])
+                            # 3. Update state
+                            pending[new_id] = {
+                                "ticker":      ticker_full,
+                                "t212_ticker": t212_ticker,
+                                "qty":         qty,
+                                "limit_price": current_price, # updated limit
+                                "sl_price":    sl_price,
+                                "tp_price":    tp_price,
+                                "timestamp":   time.time()
+                            }
+                            # Remove old
+                            del pending[order_id]
+                            logger.info(f"[chase] {ticker_full} re-submitted at ${current_price:.2f}. New ID: {new_id}")
+                        else:
+                            logger.error(f"[chase] {ticker_full} RE-SUBMIT FAILED: {res}")
+                            # Keep old in state? It was cancelled successfully, so we just log error.
+                            del pending[order_id] 
+                    else:
+                        # Order might have filled just now
+                        logger.warning(f"[chase] Could not cancel {order_id} for {ticker_full} - likely filled.")
+
+            self.save_state()
+
+        except Exception as e:
+            logger.error(f"[chase] Error in heartbeat chaser: {e}")
+
 
     def place_missing_brackets(self, ticker: str, trade: dict):
         """
@@ -1315,9 +1412,12 @@ class TradingBot:
                 try:
                     positions = self.client.get_open_positions()
                     if positions:
-                        self.check_virtual_tp(positions)
-                        self.check_trailing_stops(positions) 
+                        self.check_trailing_stops(positions)
                         self.check_trade_duration(positions)
+                        self.check_virtual_tp(positions)
+                    
+                    # Also check for pending buy orders to chase (slippage buffer)
+                    self.check_pending_orders_chase()
                 except Exception as e:
                     logger.warning(f"[heartbeat] Monitor cycle failed: {e}")
 
