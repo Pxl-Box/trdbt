@@ -77,9 +77,15 @@ class Trading212Client:
                 return resp.json()
             except requests.exceptions.HTTPError as e:
                 logger.error(f"Error {method} {endpoint}: {e}")
-                logger.error(f"Response: {e.response.text}")
-                last_exc = e
-                break
+                try:
+                    # Return error JSON so the caller can inspect specific error types 
+                    # like /api-errors/selling-equity-not-owned
+                    err_json = e.response.json()
+                    logger.error(f"Response: {err_json}")
+                    return err_json
+                except Exception:
+                    logger.error(f"Response (non-JSON): {e.response.text}")
+                    return {}
             except Exception as e:
                 logger.error(f"Error {method} {endpoint}: {e}")
                 last_exc = e

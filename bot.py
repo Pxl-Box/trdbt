@@ -222,10 +222,10 @@ class TradingBot:
 
         imported = []
         for t212_ticker, pos in live_by_t212.items():
-            if t212_ticker not in tracked_t212:
+            qty = float(pos.get('quantity', 0))
+            if t212_ticker not in tracked_t212 and qty > 0:
                 # Derive the short ticker (strip _US_EQ suffix if present)
                 short = t212_ticker.replace("_US_EQ", "").replace("_US_ETF", "")
-                qty   = pos.get('quantity', 0)
                 avg_price = pos.get('averagePrice') or pos.get('currentPrice', 0.0)
                 open_trades[short] = {
                     "qty":          qty,
@@ -246,7 +246,9 @@ class TradingBot:
         stale = []
         for short_ticker, trade in list(open_trades.items()):
             t212 = trade.get('t212_ticker', to_t212_ticker(short_ticker))
-            if t212 not in live_by_t212:
+            pos  = live_by_t212.get(t212)
+            # Remove if position is missing from API or has zero quantity
+            if not pos or float(pos.get('quantity', 0)) <= 0:
                 stale.append(short_ticker)
                 del open_trades[short_ticker]
 
@@ -867,7 +869,7 @@ class TradingBot:
 
             # Get current price from live positions
             pos = live_by_t212.get(t212_ticker)
-            if not pos:
+            if not pos or float(pos.get('quantity', 0)) <= 0:
                 continue
             current_price = pos.get('currentPrice') or pos.get('averagePrice', 0.0)
             if not current_price:
@@ -894,13 +896,13 @@ class TradingBot:
                     try:
                         _ent = float(trade.get("entry_price", 0))
                         _qt  = float(qty)
-                        # _tp_price is available from the enclosing loop
-                        _rpnl = round((_tp_price - _ent) * _qt, 4) if _ent > 0 else 0.0
+                        # tp_price is available from the enclosing loop
+                        _rpnl = round((tp_price - _ent) * _qt, 4) if _ent > 0 else 0.0
                         self.state.setdefault("realised_pnl", []).append({
                             "ticker":    ticker,
                             "pnl":       _rpnl,
                             "entry":     round(_ent, 4),
-                            "exit":      round(_tp_price, 4),
+                            "exit":      round(tp_price, 4),
                             "qty":       _qt,
                             "reason":    "Virtual TP",
                             "closed_at": datetime.now(timezone.utc).isoformat(),
@@ -916,8 +918,14 @@ class TradingBot:
                     logger.info(f"[vTP] {ticker} position closed via Take Profit. Ticker on cooldown.")
                 else:
                     logger.error(f"[vTP] {ticker} Market SELL FAILED after TP trigger: {res}. MANUAL ACTION REQUIRED! SL may have been cancelled.")
-                    # We do NOT remove it from state here, so the next heartbeat can try again 
-                    # (though SL is gone, so user really should check).
+                    # Check for 'selling-equity-not-owned' error. 
+                    # If the API says we don't own it, remove it from local state to stop the retry loop.
+                    err_type = res.get('type') if isinstance(res, dict) else ""
+                    if "selling-equity-not-owned" in err_type:
+                        logger.warning(f"[vTP] {ticker} remove from state: API confirms equity not owned.")
+                        del self.state["open_trades"][ticker]
+                        self.save_state()
+                    # We do NOT remove it for other errors, so next heartbeat can try again.
 
     #  Signal Scoring 
 

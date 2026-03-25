@@ -569,6 +569,33 @@ def show_settings():
         
         if st.button("Refresh Feeds", use_container_width=True): st.rerun()
 
+        st.markdown("---")
+        st.subheader("🚨 High-Priority Activity Alerts (Last 24h)")
+        bot_log_path = Path("logs/bot.log")
+        if bot_log_path.exists():
+            try:
+                with open(bot_log_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-1000:]
+                alerts = []
+                now = datetime.datetime.now()
+                for line in reversed(lines):
+                    if " - ERROR - " in line or " - CRITICAL - " in line:
+                        try:
+                            ts = datetime.datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+                            if (now - ts).total_seconds() < 86400:
+                                alerts.append(line.strip())
+                        except:
+                            pass
+                    if len(alerts) >= 10: # Show more in diagnostics
+                        break
+                if alerts:
+                    for alert in alerts:
+                        st.write(f"`{alert}`")
+                else:
+                    st.success("No critical alerts in the last 24 hours.")
+            except Exception:
+                st.error("Could not read logs for alerts.")
+
 # ──────────────────────────────────────────────────────────────────────────
 # ⚙ Cog button — top-right corner
 # ──────────────────────────────────────────────────────────────────────────
@@ -609,38 +636,66 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Priority Alerts ───────────────────────────────────────────────────────
-bot_log_path = Path("logs/bot.log")
-if bot_log_path.exists():
+# ── Load bot state for SL / virtual TP data ──────────────────────────────
+def load_bot_state():
     try:
-        with open(bot_log_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()[-1000:]
-        alerts = []
-        now = datetime.datetime.now()
-        for line in reversed(lines):
-            if " - ERROR - " in line or " - CRITICAL - " in line:
-                try:
-                    ts = datetime.datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
-                    if (now - ts).total_seconds() < 86400:
-                        alerts.append(line.strip())
-                except:
-                    pass
-            if len(alerts) >= 5:
-                break
-        if alerts:
-            st.error("### 🚨 High-Priority Activity Alerts (Last 24h)")
-            for alert in alerts:
-                st.write(f"`{alert}`")
+        with open("bot_state.json", "r") as f:
+            return json.load(f)
     except Exception:
-        pass
+        return {}
+
+bot_state        = load_bot_state()
+open_trades_state = bot_state.get("open_trades", {})
+realised_pnl_st  = bot_state.get("realised_pnl", [])
+
+# ── Open Positions — Card View ────────────────────────────────────────────
+st.markdown('<div class="section-title">Open Positions</div>', unsafe_allow_html=True)
+if client:
+    try:
+        positions = client.get_open_positions()
+        if positions and isinstance(positions, list):
+            for p in positions:
+                t212    = p.get("ticker", "")
+                short   = t212.replace("_US_EQ", "").replace("_US_ETF", "")
+                trade   = open_trades_state.get(short, open_trades_state.get(t212, {}))
+                qty     = p.get("quantity", 0)
+                entry   = float(p.get("averagePrice", 0))
+                current = float(p.get("currentPrice", 0))
+                ppl_val = float(p.get("ppl", 0))
+                sl      = float(trade["sl_price"]) if trade.get("sl_price") else None
+                tp      = float(trade["tp_price"]) if trade.get("tp_price") else None
+                pcls    = "pnl-pos" if ppl_val >= 0 else "pnl-neg"
+                sign    = "+" if ppl_val >= 0 else ""
+                sl_html = f'<span class="pos-value pnl-neg">£{sl:.4f}</span>' if sl else '<span class="pos-value">—</span>'
+                tp_html = f'<span class="pos-value pnl-pos">£{tp:.4f}</span>' if tp else '<span class="pos-value">—</span>'
+                st.markdown(f"""<div class="pos-card">
+                    <div class="pos-ticker">{t212}</div>
+                    <div class="pos-sub">Qty: {qty}</div>
+                    <div class="pos-row">
+                        <div class="pos-item"><span class="pos-label">Entry</span><span class="pos-value">£{entry:.4f}</span></div>
+                        <div class="pos-item"><span class="pos-label">Current</span><span class="pos-value">£{current:.4f}</span></div>
+                        <div class="pos-item"><span class="pos-label">P / L</span><span class="pos-value {pcls}">{sign}£{ppl_val:.2f}</span></div>
+                        <div class="pos-item"><span class="pos-label">🔴 Stop Loss</span>{sl_html}</div>
+                        <div class="pos-item"><span class="pos-label">🎯 Take Profit</span>{tp_html}</div>
+                    </div></div>""", unsafe_allow_html=True)
+        else:
+            st.info("No open positions found.")
+    except Exception as e:
+        st.error(f"Error fetching positions: {e}")
+
+st.markdown("---")
 
 # ── Metrics ───────────────────────────────────────────────────────────────
-m1, m2, m3, m4 = st.columns(4)
+# Calculate Total Realised P&L first
+total_realised = sum(float(r.get("pnl", 0)) for r in realised_pnl_st)
+
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("💰 Total Equity",   f"£{float(equity.get('total',    0)):.2f}")
 m2.metric("💵 Free Cash",      f"£{float(equity.get('free',     0)):.2f}")
 m3.metric("📈 Invested",       f"£{float(equity.get('invested', 0)):.2f}")
-ppl = float(equity.get("ppl", 0))
-m4.metric("🔄 Unrealised P/L", f"£{ppl:.2f}", delta=f"{ppl:.2f}")
+ppl_total = float(equity.get("ppl", 0))
+m4.metric("🔄 Unrealised P/L", f"£{ppl_total:.2f}", delta=f"{ppl_total:.2f}")
+m5.metric("✅ Realised P/L",   f"£{total_realised:.2f}")
 
 st.markdown("---")
 
@@ -671,89 +726,15 @@ regime_label, regime_detail = get_market_regime()
 st.markdown(f"### {regime_label}")
 st.caption(regime_detail)
 
-# ── Active Market Sessions ──────────────────────────────────────────────
-st.markdown("---")
-st.subheader("🌐 Active Market Sessions")
-
-def is_ticker_open_ui(ticker):
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    _now_utc = _dt.now(_tz.utc)
-    # Crypto 24/7
-    if ticker.endswith("-USD") or "-USD" in ticker: return True
-    # EU / UK
-    if any(ticker.endswith(s) for s in [".PA", ".XC", ".L"]):
-        # EU markets generally 8am-4:30pm UTC
-        if _now_utc.weekday() >= 5: return False
-        _open_utc  = _now_utc.replace(hour=8, minute=0, second=0, microsecond=0)
-        _close_utc = _now_utc.replace(hour=16, minute=30, second=0, microsecond=0)
-        return _open_utc <= _now_utc <= _close_utc
-    # US Default
-    _now_et = _now_utc + _td(hours=-4)
-    if _now_et.weekday() >= 5: return False
-    _open_et  = _now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
-    _close_et = _now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
-    return _open_et <= _now_et <= _close_et
-
-tickers_in_config = config.get("tickers", [])
-if tickers_in_config:
-    open_list = [t for t in tickers_in_config if is_ticker_open_ui(t)]
-    closed_list = [t for t in tickers_in_config if not is_ticker_open_ui(t)]
-    
-    sc1, sc2 = st.columns(2)
-    with sc1:
-        st.markdown(f"**🟢 Open ({len(open_list)})**")
-        if open_list:
-            st.caption(", ".join(open_list[:15]) + ("..." if len(open_list) > 15 else ""))
-        else:
-            st.caption("None")
-    with sc2:
-        st.markdown(f"**🔴 Closed ({len(closed_list)})**")
-        if closed_list:
-            st.caption(", ".join(closed_list[:15]) + ("..." if len(closed_list) > 15 else ""))
-        else:
-            st.caption("None")
-else:
-    st.info("No tickers in watchlist.")
-
-st.markdown("---")
-
-# ── Load bot state for SL / virtual TP data ──────────────────────────────
-def load_bot_state():
-    try:
-        with open("bot_state.json", "r") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-bot_state        = load_bot_state()
-open_trades_state = bot_state.get("open_trades", {})
-realised_pnl_st  = bot_state.get("realised_pnl", [])
-
-st.markdown("""
-<style>
-.pos-card{background:#1e1e2e;border-radius:14px;padding:18px 22px;margin-bottom:14px;border-left:4px solid #6c63ff;}
-.pos-ticker{font-size:1.2rem;font-weight:700;color:#e2e8f0;}
-.pos-sub{font-size:0.82rem;color:#a0aec0;margin-top:2px;}
-.pos-row{display:flex;gap:28px;margin-top:12px;flex-wrap:wrap;}
-.pos-item{display:flex;flex-direction:column;}
-.pos-label{font-size:0.72rem;color:#718096;text-transform:uppercase;letter-spacing:.06em;}
-.pos-value{font-size:1.05rem;font-weight:600;color:#e2e8f0;}
-.pnl-pos{color:#68d391!important;}
-.pnl-neg{color:#fc8181!important;}
-.pnl-banner{background:#1a202c;border-radius:12px;padding:16px 22px;margin-bottom:16px;border:1px solid #2d3748;}
-</style>
-""", unsafe_allow_html=True)
-
-# ── Realised P&L ──────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">Realised P&L (Closed Trades)</div>', unsafe_allow_html=True)
+# ── Realised P&L Table ───────────────────────────────────────────────────
+st.markdown('<div class="section-title">Realised P&L (Closed Trades) History</div>', unsafe_allow_html=True)
 if realised_pnl_st:
     import pandas as pd
-    total = sum(float(r.get("pnl", 0)) for r in realised_pnl_st)
-    cls   = "pnl-pos" if total >= 0 else "pnl-neg"
-    sign  = "+" if total >= 0 else ""
+    cls   = "pnl-pos" if total_realised >= 0 else "pnl-neg"
+    sign  = "+" if total_realised >= 0 else ""
     st.markdown(f"""<div class="pnl-banner">
         <span style="font-size:.85rem;color:#718096;text-transform:uppercase;letter-spacing:.06em;">Total Closed P&L</span><br>
-        <span class="{cls}" style="font-size:1.8rem;font-weight:700;">{sign}£{total:.2f}</span>
+        <span class="{cls}" style="font-size:1.8rem;font-weight:700;">{sign}£{total_realised:.2f}</span>
         &nbsp;<span style="color:#718096;font-size:.85rem;">across {len(realised_pnl_st)} trade(s)</span>
     </div>""", unsafe_allow_html=True)
     df_pnl = pd.DataFrame(realised_pnl_st)
@@ -765,42 +746,7 @@ else:
 
 st.markdown("---")
 
-# ── Open Positions — Card View ────────────────────────────────────────────
-st.markdown('<div class="section-title">Open Positions</div>', unsafe_allow_html=True)
-if client:
-    try:
-        positions = client.get_open_positions()
-        if positions and isinstance(positions, list):
-            for p in positions:
-                t212    = p.get("ticker", "")
-                short   = t212.replace("_US_EQ", "").replace("_US_ETF", "")
-                trade   = open_trades_state.get(short, open_trades_state.get(t212, {}))
-                qty     = p.get("quantity", 0)
-                entry   = float(p.get("averagePrice", 0))
-                current = float(p.get("currentPrice", 0))
-                ppl     = float(p.get("ppl", 0))
-                sl      = float(trade["sl_price"]) if trade.get("sl_price") else None
-                tp      = float(trade["tp_price"]) if trade.get("tp_price") else None
-                pcls    = "pnl-pos" if ppl >= 0 else "pnl-neg"
-                sign    = "+" if ppl >= 0 else ""
-                sl_html = f'<span class="pos-value pnl-neg">£{sl:.4f}</span>' if sl else '<span class="pos-value">—</span>'
-                tp_html = f'<span class="pos-value pnl-pos">£{tp:.4f}</span>' if tp else '<span class="pos-value">—</span>'
-                st.markdown(f"""<div class="pos-card">
-                    <div class="pos-ticker">{t212}</div>
-                    <div class="pos-sub">Qty: {qty}</div>
-                    <div class="pos-row">
-                        <div class="pos-item"><span class="pos-label">Entry</span><span class="pos-value">£{entry:.4f}</span></div>
-                        <div class="pos-item"><span class="pos-label">Current</span><span class="pos-value">£{current:.4f}</span></div>
-                        <div class="pos-item"><span class="pos-label">P / L</span><span class="pos-value {pcls}">{sign}£{ppl:.2f}</span></div>
-                        <div class="pos-item"><span class="pos-label">🔴 Stop Loss</span>{sl_html}</div>
-                        <div class="pos-item"><span class="pos-label">🎯 Take Profit</span>{tp_html}</div>
-                    </div></div>""", unsafe_allow_html=True)
-        else:
-            st.info("No open positions found.")
-    except Exception as e:
-        st.warning(f"Could not load positions: {e}")
-else:
-    st.info("No API key set. Open ⚙️ Settings → API & Control to add your key.")
+# ... (Handled by sections above)
 
 st.markdown("---")
 
