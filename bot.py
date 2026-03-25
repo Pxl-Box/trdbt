@@ -77,7 +77,12 @@ class TradingBot:
         self.state    = self.load_state()
         self.client   = None
         self.strategy = None
-        
+
+        # Per-run set of tickers the API has confirmed we do NOT own.
+        # Used to prevent phantom positions being re-imported by sync_open_trades
+        # and causing an infinite "selling-equity-not-owned" retry loop.
+        self.purged_tickers: set = set()
+
         # Initialize AI Inference engine with config-defined path
         model_path = self.config.get("ml_model_path", None)
         self.quant_engine = QuantInference(model_path=model_path) if model_path else QuantInference()
@@ -226,6 +231,15 @@ class TradingBot:
             if t212_ticker not in tracked_t212 and qty > 0:
                 # Derive the short ticker (strip _US_EQ suffix if present)
                 short = t212_ticker.replace("_US_EQ", "").replace("_US_ETF", "")
+
+                # Skip tickers that the API has already confirmed as not owned this run.
+                # This prevents a position that was just closed (but still shows in the
+                # portfolio snapshot due to API lag) from being re-imported and queued
+                # for another sell, causing an infinite "selling-equity-not-owned" loop.
+                if short in self.purged_tickers:
+                    logger.debug(f"[sync] Skipping import of {short} — already purged this run.")
+                    continue
+
                 avg_price = pos.get('averagePrice') or pos.get('currentPrice', 0.0)
                 open_trades[short] = {
                     "qty":          qty,
@@ -836,6 +850,14 @@ class TradingBot:
                 changed = True
             else:
                 logger.error(f"[trail] {ticker} Failed to place updated SL: {sl_res}")
+                # If the API confirms we don't own this equity, remove from state
+                # and blacklist it for the rest of this run to prevent more retries.
+                err_type = sl_res.get('type') if isinstance(sl_res, dict) else ""
+                if "selling-equity-not-owned" in err_type:
+                    logger.warning(f"[trail] {ticker}: API confirms equity not owned. Removing from state and blacklisting for this run.")
+                    open_trades.pop(ticker, None)
+                    self.purged_tickers.add(ticker)
+                    changed = True
 
         if changed:
             self.save_state()
@@ -918,12 +940,14 @@ class TradingBot:
                     logger.info(f"[vTP] {ticker} position closed via Take Profit. Ticker on cooldown.")
                 else:
                     logger.error(f"[vTP] {ticker} Market SELL FAILED after TP trigger: {res}. MANUAL ACTION REQUIRED! SL may have been cancelled.")
-                    # Check for 'selling-equity-not-owned' error. 
-                    # If the API says we don't own it, remove it from local state to stop the retry loop.
+                    # Check for 'selling-equity-not-owned' error.
+                    # If the API says we don't own it, remove it from local state and
+                    # add to purged_tickers to prevent re-import on the next sync.
                     err_type = res.get('type') if isinstance(res, dict) else ""
                     if "selling-equity-not-owned" in err_type:
-                        logger.warning(f"[vTP] {ticker} remove from state: API confirms equity not owned.")
+                        logger.warning(f"[vTP] {ticker}: API confirms equity not owned. Removing from state and blacklisting for this run.")
                         del self.state["open_trades"][ticker]
+                        self.purged_tickers.add(ticker)
                         self.save_state()
                     # We do NOT remove it for other errors, so next heartbeat can try again.
 
