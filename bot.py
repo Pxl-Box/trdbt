@@ -679,13 +679,21 @@ class TradingBot:
                 
                 # 2. Order Status Check (fallback)
                 order = self.client.get_order_by_id(order_id)
-                status = order.get("status", "").upper()
-                if status == "FILLED":
-                    logger.info(f"[{t212_ticker}] Fill confirmed via order status FILLED.")
-                    return True
-                elif status in ("REJECTED", "CANCELLED", "EXPIRED"):
-                    logger.warning(f"[{t212_ticker}] Order {status} during fill-wait.")
-                    return False
+                status = order.get("status", "")
+                
+                # If status is an int (like 404) or missing, it's an API error, not a trade status
+                if isinstance(status, str):
+                    status_upper = status.upper()
+                    if status_upper == "FILLED":
+                        logger.info(f"[{t212_ticker}] Fill confirmed via order status FILLED.")
+                        return True
+                    elif status_upper in ("REJECTED", "CANCELLED", "EXPIRED"):
+                        logger.warning(f"[{t212_ticker}] Order {status_upper} during fill-wait.")
+                        return False
+                elif order.get("_status_code") == 404:
+                    # Order no longer exists  implies it may have filled and moved to history
+                    # We rely on the Position Check above to confirm.
+                    pass
                 
             except Exception as e:
                 logger.error(f"[fill] Error polling order {order_id} ({t212_ticker}): {e}")
