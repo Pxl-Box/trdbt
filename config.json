@@ -29,8 +29,11 @@
     "sl_atr_multiplier": 1.5,
     "risk_per_trade_pct": 0.01,
     "market_hours_check": true,
-    "cycle_interval_secs": 900,
+    "cycle_interval_secs": 300,
 
     "quant_sizing_enabled": true,
-    "ml_model_path": "trained_models/ai_brain_v1.pkl"
+    "ml_model_path": "trained_models/ai_brain_v1.pkl",
+    "max_trade_duration_hours": 48,
+    "dynamic_tp_enabled": true,
+    "breakeven_buffer_pct": 0.002
 }

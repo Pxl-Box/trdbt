@@ -81,11 +81,13 @@ class Trading212Client:
                     # Return error JSON so the caller can inspect specific error types 
                     # like /api-errors/selling-equity-not-owned
                     err_json = e.response.json()
+                    if isinstance(err_json, dict):
+                        err_json["_status_code"] = e.response.status_code
                     logger.error(f"Response: {err_json}")
                     return err_json
                 except Exception:
                     logger.error(f"Response (non-JSON): {e.response.text}")
-                    return {}
+                    return {"_status_code": e.response.status_code, "error": "non-json response", "text": e.response.text}
             except Exception as e:
                 logger.error(f"Error {method} {endpoint}: {e}")
                 last_exc = e

@@ -121,19 +121,25 @@ class TradingBot:
                     s.setdefault("open_trades", {})
                     s.setdefault("cooldowns", {})
                     s.setdefault("ticker_health", {})
+                    # Load purged_tickers into the set
+                    self.purged_tickers = set(s.get("purged_tickers", []))
                     return s
             except Exception:
                 pass
+        self.purged_tickers = set()
         return {
             "peak_equity":   0.0,
             "open_trades":   {},
             "pending_orders": {},   # order_id -> {ticker, qty, sl_price, t212_ticker}
             "cooldowns":     {},
-            "ticker_health":  {}
+            "ticker_health":  {},
+            "purged_tickers": [] 
         }
 
     def save_state(self):
         try:
+            # Sync set back to list for JSON
+            self.state["purged_tickers"] = list(self.purged_tickers) if hasattr(self, 'purged_tickers') else []
             with open(STATE_FILE, "w") as f:
                 json.dump(self.state, f, indent=4)
         except Exception as e:
@@ -198,6 +204,30 @@ class TradingBot:
             self.state["open_trades"] = {}
             self.save_state()
             logger.info("Lockdown complete. All positions liquidated. Bot LOCKED.")
+            logger.info("Lockdown complete. All positions liquidated. Bot LOCKED.")
+
+    #  Error Helpers
+
+    def is_equity_not_owned_error(self, res: dict) -> bool:
+        """
+        Returns True if the API response indicates a 'selling-equity-not-owned' error.
+        We check the 'type' field and the '_status_code' added by our client.
+        """
+        if not isinstance(res, dict):
+            return False
+        
+        # Check T212 native error type
+        err_type = res.get('type', '')
+        if isinstance(err_type, str) and "selling-equity-not-owned" in err_type:
+            return True
+        
+        # Fallback: check status code and detail string if JSON is incomplete
+        if res.get('_status_code') == 400:
+            detail = str(res.get('detail', '')).lower()
+            if "not owned" in detail or "selling more" in detail:
+                return True
+                
+        return False
 
     #  Position Reconciliation 
 
@@ -232,12 +262,12 @@ class TradingBot:
                 # Derive the short ticker (strip _US_EQ suffix if present)
                 short = t212_ticker.replace("_US_EQ", "").replace("_US_ETF", "")
 
-                # Skip tickers that the API has already confirmed as not owned this run.
+                # Skip tickers that the API has already confirmed as not owned.
                 # This prevents a position that was just closed (but still shows in the
                 # portfolio snapshot due to API lag) from being re-imported and queued
                 # for another sell, causing an infinite "selling-equity-not-owned" loop.
                 if short in self.purged_tickers:
-                    logger.debug(f"[sync] Skipping import of {short} — already purged this run.")
+                    logger.debug(f"[sync] Skipping import of {short} — already blacklisted as phantom.")
                     continue
 
                 avg_price = pos.get('averagePrice') or pos.get('currentPrice', 0.0)
@@ -246,7 +276,8 @@ class TradingBot:
                     "entry_price":  avg_price,
                     "sl_order_id":  None,   # unknown  was opened outside the bot
                     "t212_ticker":  t212_ticker,
-                    "imported":     True
+                    "imported":     True,
+                    "opened_at":    datetime.now(timezone.utc).isoformat()
                 }
                 imported.append(f"{short} (qty={qty} @ {avg_price:.2f})")
 
@@ -259,6 +290,13 @@ class TradingBot:
         #  Remove stale local records 
         stale = []
         for short_ticker, trade in list(open_trades.items()):
+            # Proactive purge: If it's in purged_tickers, remove it now.
+            if short_ticker in self.purged_tickers:
+                logger.warning(f"[sync] Cleaning up {short_ticker} from state — it is blacklisted.")
+                stale.append(short_ticker)
+                del open_trades[short_ticker]
+                continue
+
             t212 = trade.get('t212_ticker', to_t212_ticker(short_ticker))
             pos  = live_by_t212.get(t212)
             # Remove if position is missing from API or has zero quantity
@@ -388,6 +426,11 @@ class TradingBot:
                 trade['sl_order_id'] = sl_res['id']
                 trade['sl_price']    = stop_price
                 logger.info(f"[{ticker}] Catch-up SL placed @ {stop_price:.4f}")
+            elif self.is_equity_not_owned_error(sl_res):
+                logger.warning(f"[{ticker}] Sync SL failed: API confirms equity not owned. Purging.")
+                self.purged_tickers.add(ticker)
+                self.state.get("open_trades", {}).pop(ticker, None)
+                self.save_state()
 
         # 2. TAKE PROFIT (virtual — stored locally, monitored by check_virtual_tp)
         # T212 reserves shares for the SL order, preventing a second sell order.
@@ -602,7 +645,8 @@ class TradingBot:
                     "sl_order_id":  sl_id,
                     "sl_price":     stop_loss_price,
                     "tp_price":     float(target_tp) if target_tp else None,  # Virtual TP
-                    "t212_ticker":  t212_ticker
+                    "t212_ticker":  t212_ticker,
+                    "opened_at":    datetime.now(timezone.utc).isoformat()
                 }
                 self.state.get("pending_orders", {}).pop(str(order_id), None)
                 self.save_state()
@@ -768,11 +812,8 @@ class TradingBot:
         Bump stop-losses upward for positions that have moved into meaningful profit.
 
         Two tiers (thresholds configurable in config.json):
-          Tier 1   price  entry + 1.5ATR    move SL to break-even (entry price)
+          Tier 1   price  entry + 1.5ATR    move SL to break-even (entry price + buffer)
           Tier 2   price  entry + 3.0ATR    move SL to entry + 1.5ATR (lock profit)
-
-        Only bumps *upward*  never tightens a stop thats already higher.
-        Cancels the old SL order and places a new one via the API.
         """
         open_trades = self.state.get("open_trades", {})
         if not open_trades:
@@ -780,6 +821,7 @@ class TradingBot:
 
         tier1_atr = self.config.get("trailing_sl_tier1_atr", 1.5)  # break-even trigger
         tier2_atr = self.config.get("trailing_sl_tier2_atr", 3.0)  # lock-profit trigger
+        be_buffer = self.config.get("breakeven_buffer_pct", 0.002) # fee protection
 
         # Build a quick lookup of live positions for current prices
         live_by_base = {}
@@ -789,8 +831,8 @@ class TradingBot:
 
         changed = False
         for ticker, trade in open_trades.items():
-            entry_price = trade.get('entry_price', 0.0)
-            current_sl  = trade.get('sl_price', 0.0)
+            entry_price = float(trade.get('entry_price', 0.0))
+            current_sl  = float(trade.get('sl_price', 0.0))
             sl_order_id = trade.get('sl_order_id')
             t212_ticker = trade.get('t212_ticker', to_t212_ticker(ticker))
             qty         = trade.get('qty', 0)
@@ -803,39 +845,38 @@ class TradingBot:
             pos = live_by_base.get(base)
             if not pos:
                 continue
-            current_price = pos.get('currentPrice') or pos.get('averagePrice', 0.0)
+            current_price = float(pos.get('currentPrice') or pos.get('averagePrice', 0.0))
             if not current_price:
                 continue
 
             # Get ATR for this ticker
-            atr = self.strategy.get_current_atr(ticker) if self.strategy else 0.0
+            atr = self.strategy.get_current_atr(ticker) if self.strategy else (current_price * 0.01)
             if atr <= 0:
                 continue
 
-            profit = current_price - entry_price
+            # Calculate target SL prices based on tiers
+            # Tier 1: Move to Break-Even (Entry + Buffer)
+            target_t1 = round(entry_price * (1.0 + be_buffer), 4)
+            # Tier 2: Lock profit at Entry + 1.5 ATR
+            target_t2 = round(entry_price + (1.5 * atr), 4)
 
-            # Determine target SL level
             new_sl = None
-            if profit >= tier2_atr * atr:
-                # Tier 2: lock in profit at entry + 1.5ATR
-                candidate = round(entry_price + tier1_atr * atr, 4)
-                if candidate > current_sl:
-                    new_sl = candidate
+            tier = 0
+            if current_price >= (entry_price + (tier2_atr * atr)):
+                if target_t2 > current_sl:
+                    new_sl = target_t2
                     tier = 2
-            elif profit >= tier1_atr * atr:
-                # Tier 1: move to break-even
-                candidate = round(entry_price, 4)
-                if candidate > current_sl:
-                    new_sl = candidate
+            elif current_price >= (entry_price + (tier1_atr * atr)):
+                if target_t1 > current_sl:
+                    new_sl = target_t1
                     tier = 1
 
             if new_sl is None:
                 continue
 
             logger.info(
-                f"[trail] {ticker} | price={current_price:.4f} entry={entry_price:.4f} "
-                f"profit={profit:.4f} ({profit/entry_price*100:.1f}%) | "
-                f"Tier {tier}: bumping SL {current_sl:.4f}  {new_sl:.4f}"
+                f"[trail] {ticker} | price={current_price:.4f} entry={entry_price:.4f} | "
+                f"Tier {tier}: bumping SL {current_sl:.4f} -> {new_sl:.4f}"
             )
 
             # Cancel old SL, place new one
@@ -850,11 +891,7 @@ class TradingBot:
                 changed = True
             else:
                 logger.error(f"[trail] {ticker} Failed to place updated SL: {sl_res}")
-                # If the API confirms we don't own this equity, remove from state
-                # and blacklist it for the rest of this run to prevent more retries.
-                err_type = sl_res.get('type') if isinstance(sl_res, dict) else ""
-                if "selling-equity-not-owned" in err_type:
-                    logger.warning(f"[trail] {ticker}: API confirms equity not owned. Removing from state and blacklisting for this run.")
+                if self.is_equity_not_owned_error(sl_res):
                     open_trades.pop(ticker, None)
                     self.purged_tickers.add(ticker)
                     changed = True
@@ -862,94 +899,118 @@ class TradingBot:
         if changed:
             self.save_state()
 
-    #  Virtual Take Profit Monitor 
+    def check_trade_duration(self, open_positions: list):
+        """
+        Check if any trade has been open for longer than the maximum allowed duration.
+        If it has, and it hasn't hit TP/SL, perform an emergency exit.
+        """
+        open_trades = self.state.get("open_trades", {})
+        if not open_trades: return
+
+        max_hours = self.config.get("max_trade_duration_hours", 48)
+        now = datetime.now(timezone.utc)
+
+        for ticker, trade in list(open_trades.items()):
+            opened_str = trade.get("opened_at")
+            if not opened_str: continue
+
+            try:
+                opened_dt = datetime.fromisoformat(opened_str)
+                age_hours = (now - opened_dt).total_seconds() / 3600
+                if age_hours >= max_hours:
+                    logger.warning(f"[stale] {ticker} hit max duration ({age_hours:.1f}h >= {max_hours}h). Executing emergency exit.")
+                    self.handle_sell(ticker, "Target (Stale Exit)")
+            except Exception as e:
+                logger.error(f"[stale] Error checking age for {ticker}: {e}")
 
     def check_virtual_tp(self, open_positions: list):
         """
-        Virtual Take Profit monitor - runs every 60 seconds in the heartbeat loop.
-
-        T212 reserves shares for the physical Stop Loss order, preventing a second
-        standalone sell order. Instead, the bot tracks a 'tp_price' locally and
-        monitors it here. When the live price >= tp_price, the bot:
-          1. Cancels the physical Stop Loss (to free up the reserved shares)
-          2. Executes a Market Sell to lock in the profit
+        Check live prices against 'tp_price' stored in open_trades.
+        If dynamic_tp_enabled is True, it starts a tight trailing stop instead of immediate sell.
         """
         open_trades = self.state.get("open_trades", {})
-        if not open_trades:
-            return
-
-        live_by_t212 = {p.get('ticker'): p for p in open_positions}
+        dynamic_tp  = self.config.get("dynamic_tp_enabled", True)
+        
+        # Build lookup for live prices
+        live_prices = {}
+        for pos in open_positions:
+            t = pos.get('ticker', '').replace("_US_EQ", "").replace("_US_ETF", "")
+            live_prices[t] = float(pos.get('currentPrice') or pos.get('averagePrice', 0.0))
 
         for ticker, trade in list(open_trades.items()):
             tp_price    = trade.get('tp_price')
             sl_order_id = trade.get('sl_order_id')
             t212_ticker = trade.get('t212_ticker', to_t212_ticker(ticker))
             qty         = trade.get('qty', 0)
-
-            if not tp_price or not qty:
+            
+            if not tp_price or ticker not in live_prices:
                 continue
 
-            # Get current price from live positions
-            pos = live_by_t212.get(t212_ticker)
-            if not pos or float(pos.get('quantity', 0)) <= 0:
-                continue
-            current_price = pos.get('currentPrice') or pos.get('averagePrice', 0.0)
-            if not current_price:
-                continue
+            current_p = live_prices[ticker]
 
-            if current_price >= tp_price:
-                logger.info(
-                    f"[vTP] {ticker} price {current_price:.4f} >= target {tp_price:.4f}. "
-                    f"Triggering Virtual Take Profit!"
-                )
-                # Step 1: Cancel physical SL to free up reserved shares
+            # 1. Check if we are currently "Chasing" (Dynamic TP)
+            if trade.get("is_chasing"):
+                chase_sl = trade.get("chase_sl", 0.0)
+                if current_p < chase_sl:
+                    logger.info(f"[vTP] {ticker} Profit Chasing ended (Dip below {chase_sl:.4f}). Selling.")
+                    # Sell logic follows below
+                else:
+                    # Trailing upward: Update chase_sl with 0.5 ATR
+                    atr = self.strategy.get_current_atr(ticker) if self.strategy else (current_p * 0.01)
+                    new_chase_sl = round(current_p - (0.5 * atr), 4)
+                    if new_chase_sl > chase_sl:
+                        trade["chase_sl"] = new_chase_sl
+                        logger.debug(f"[vTP] {ticker} Chasing: Bumped SL to {new_chase_sl:.4f}")
+                    continue # Keep riding the wave
+
+            # 2. Check if target hit for the first time
+            if current_p >= tp_price:
+                if dynamic_tp:
+                    if not trade.get("is_chasing"):
+                        logger.info(f"[vTP] {ticker} Target reached ({current_p:.4f} >= {tp_price:.4f}). PHASE 2: Chasing Profit...")
+                        trade["is_chasing"] = True
+                        atr = self.strategy.get_current_atr(ticker) if self.strategy else (current_p * 0.01)
+                        trade["chase_sl"] = round(current_p - (0.5 * atr), 4)
+                        self.save_state()
+                        continue
+                else:
+                    logger.info(f"[vTP] {ticker} Virtual TP Triggered ({current_p:.4f} >= {tp_price:.4f}). Selling.")
+
+                # Cancel SL order first to free reserved shares
                 if sl_order_id:
-                    cancelled = self.client.cancel_order(sl_order_id)
-                    if cancelled:
-                        logger.info(f"[vTP] {ticker} Physical SL {sl_order_id} cancelled.")
-                    else:
-                        logger.warning(f"[vTP] {ticker} Could not cancel SL {sl_order_id}. Attempting sell anyway.")
+                    self.client.cancel_order(sl_order_id)
 
                 # Step 2: Market sell to lock profit
                 res = self.client.place_market_sell(t212_ticker, qty)
                 if res and res.get('id'):
                     logger.info(f"[vTP] {ticker} Market SELL submitted. ID: {res['id']}")
-                    # Record Realised P&L for dashboard tracking
+                    # Record Realised P&L
                     try:
                         _ent = float(trade.get("entry_price", 0))
                         _qt  = float(qty)
-                        # tp_price is available from the enclosing loop
-                        _rpnl = round((tp_price - _ent) * _qt, 4) if _ent > 0 else 0.0
+                        _rpnl = round((current_p - _ent) * _qt, 4) if _ent > 0 else 0.0
                         self.state.setdefault("realised_pnl", []).append({
                             "ticker":    ticker,
                             "pnl":       _rpnl,
                             "entry":     round(_ent, 4),
-                            "exit":      round(tp_price, 4),
+                            "exit":      round(current_p, 4),
                             "qty":       _qt,
-                            "reason":    "Virtual TP",
+                            "reason":    "Virtual TP (Dynamic)" if trade.get("is_chasing") else "Virtual TP",
                             "closed_at": datetime.now(timezone.utc).isoformat(),
                         })
                         logger.info(f"[vTP] Realised P&L: {ticker} -> £{_rpnl:+.4f}")
                     except Exception as _pnl_err:
-                        logger.warning(f"[vTP] P&L recording failed: {_pnl_err}")
+                        logger.warning(f"[vTP] P&L recording failed for {ticker}: {_pnl_err}")
 
-                    # Only remove from open_trades and add to cooldowns on success
                     del self.state["open_trades"][ticker]
                     self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
                     self.save_state()
-                    logger.info(f"[vTP] {ticker} position closed via Take Profit. Ticker on cooldown.")
                 else:
-                    logger.error(f"[vTP] {ticker} Market SELL FAILED after TP trigger: {res}. MANUAL ACTION REQUIRED! SL may have been cancelled.")
-                    # Check for 'selling-equity-not-owned' error.
-                    # If the API says we don't own it, remove it from local state and
-                    # add to purged_tickers to prevent re-import on the next sync.
-                    err_type = res.get('type') if isinstance(res, dict) else ""
-                    if "selling-equity-not-owned" in err_type:
-                        logger.warning(f"[vTP] {ticker}: API confirms equity not owned. Removing from state and blacklisting for this run.")
-                        del self.state["open_trades"][ticker]
+                    logger.error(f"[vTP] {ticker} Market SELL FAILED: {res}")
+                    if self.is_equity_not_owned_error(res):
+                        self.state.get("open_trades", {}).pop(ticker, None)
                         self.purged_tickers.add(ticker)
                         self.save_state()
-                    # We do NOT remove it for other errors, so next heartbeat can try again.
 
     #  Signal Scoring 
 
@@ -1220,18 +1281,26 @@ class TradingBot:
             interval = self.config.get("cycle_interval_secs", 900)  # default 15 min
             logger.info(f"Next cycle in {interval}s ({interval//60}m {interval%60}s).")
 
-            # Heartbeat: check Virtual TPs every 60s within the wait period
-            heartbeat_secs = 60
+            # Heartbeat: check Virtual TPs according to config (default 30s)
+            # Fetch positions once per heartbeat to stay efficient.
+            heartbeat_secs = self.config.get("heartbeat_interval_secs", 30)
             elapsed = 0
             while elapsed < interval:
                 time.sleep(heartbeat_secs)
                 elapsed += heartbeat_secs
-                if elapsed < interval:  # skip the last check (full cycle does it)
-                    try:
-                        positions = self.client.get_open_positions()
+                
+                # Check shutdown or skip if cycle is about to start
+                if elapsed >= interval:
+                    break
+
+                try:
+                    positions = self.client.get_open_positions()
+                    if positions:
                         self.check_virtual_tp(positions)
-                    except Exception as e:
-                        logger.warning(f"[heartbeat] Virtual TP check failed: {e}")
+                        self.check_trailing_stops(positions) 
+                        self.check_trade_duration(positions)
+                except Exception as e:
+                    logger.warning(f"[heartbeat] Monitor cycle failed: {e}")
 
 
 if __name__ == "__main__":
