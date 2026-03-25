@@ -661,13 +661,12 @@ class TradingBot:
                 f"Order remains live on exchange. SL will be placed on next restart or when fill is confirmed."
             )
 
-    def wait_for_fill(self, order_id: int, ticker: str = None, timeout_secs: int = 60) -> bool:
+    def wait_for_fill(self, order_id: str, t212_ticker: str = None, timeout_secs: int = 60) -> bool:
         """
         Poll the API until the order is FILLED or the timeout is reached.
         Returns True if filled, False otherwise.
         """
         start_t = time.time()
-        t212_ticker = to_t212_ticker(ticker) if ticker else None
         
         while (time.time() - start_t) < timeout_secs:
             try:
@@ -675,17 +674,17 @@ class TradingBot:
                 if t212_ticker:
                     positions = self.client.get_open_positions()
                     if any(p.get('ticker') == t212_ticker for p in positions):
-                        logger.info(f"[{ticker}] Fill confirmed via position check.")
+                        logger.info(f"[{t212_ticker}] Fill confirmed via position check.")
                         return True
                 
                 # 2. Order Status Check (fallback)
                 order = self.client.get_order_by_id(order_id)
                 status = order.get("status", "").upper()
                 if status == "FILLED":
-                    logger.info(f"[{ticker}] Fill confirmed via order status FILLED.")
+                    logger.info(f"[{t212_ticker}] Fill confirmed via order status FILLED.")
                     return True
                 elif status in ("REJECTED", "CANCELLED", "EXPIRED"):
-                    logger.warning(f"[{ticker}] Order {status} during fill-wait.")
+                    logger.warning(f"[{t212_ticker}] Order {status} during fill-wait.")
                     return False
                 
             except Exception as e:
