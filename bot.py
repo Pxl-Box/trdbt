@@ -688,11 +688,11 @@ class TradingBot:
                     return False
                 
             except Exception as e:
-                logger.error(f"[fill] Error polling order {order_id} ({ticker}): {e}")
+                logger.error(f"[fill] Error polling order {order_id} ({t212_ticker}): {e}")
 
             time.sleep(FILL_POLL_INTERVAL)
 
-        logger.warning(f"[fill] Timeout waiting for order {order_id} ({ticker}) to fill.")
+        logger.warning(f"[fill] Timeout waiting for order {order_id} ({t212_ticker}) to fill.")
         return False
 
     def handle_sell(self, ticker: str):
