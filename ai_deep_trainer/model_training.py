@@ -204,15 +204,8 @@ def train_and_export_model():
                     # Store best iteration count
                     best_params['n_estimators'] = len(cv_results)
                     logger.info(f"  ✨ [NEW BEST] [Iter {i+1}/{n_iter}] Best Score: {best_score:.4f}")
-                else:
-                    no_improvement_count += 1
                     
-                if no_improvement_count >= patience:
-                    logger.info(f"🛑 EARLY STOPPING: No improvement for {patience} iterations. Keeping the best brain.")
-                    break
-                
-                # 💾 Checkpoint: Save the best brain so far every 50 iterations
-                if best_params and (i + 1) % 50 == 0:
+                    # 💾 Save Checkpoint on every NEW BEST
                     try:
                         ckpt_model = xgb.train(best_params, dtrain, num_boost_round=best_params.get('n_estimators', 500))
                         ckpt_data = {
@@ -223,12 +216,18 @@ def train_and_export_model():
                             "features": list(X.columns),
                             "hyperparams": best_params
                         }
-                        ckpt_path = MODELS_DIR / f"ai_brain_checkpoint_iter{i+1}.pkl"
+                        ckpt_path = MODELS_DIR / "ai_brain_checkpoint_best.pkl"
                         with open(ckpt_path, 'wb') as f:
                             pickle.dump(ckpt_data, f)
-                        logger.info(f"💾 Checkpoint saved at iteration {i+1} | Score: {best_score:.4f} -> {ckpt_path.name}")
+                        logger.info(f"  💾 Checkpoint updated: {best_score:.4f} -> {ckpt_path.name}")
                     except Exception as ckpt_err:
-                        logger.warning(f"⚠️ Checkpoint save failed at iter {i+1}: {ckpt_err}")
+                        logger.warning(f"  ⚠️ Checkpoint save failed: {ckpt_err}")
+                else:
+                    no_improvement_count += 1
+                    
+                if no_improvement_count >= patience:
+                    logger.info(f"🛑 EARLY STOPPING: No improvement for {patience} iterations. Keeping the best brain.")
+                    break
             
             logger.info(f"🏆 Best Architecture Selected: {best_params}")
         else:
