@@ -130,9 +130,37 @@ def train_and_export_model():
         }
 
         if is_turbo:
+            # Interactive Intensity Presets
+            print("\n" + "="*50)
+            print("🧠  SELECT TRAINING INTENSITY PRESET  🧠")
+            print("="*50)
+            print("1. [🦾 BIG BRAIN]  - Max Rigor (5-Fold, 250 Iter, High Patience)")
+            print("2. [🧠 NORMAL]     - Standard  (3-Fold, 100 Iter, Med Patience)")
+            print("3. [🧊 SMOOTH]     - Fast      (2-Fold, 25 Iter,  Low Patience)")
+            print("4. [🛠️ CUSTOM]     - Individual settings manual entry")
+            print("="*50)
+            
+            choice = input("Enter Choice (1-4, Default 1): ").strip() or "1"
+            
+            # Preset Defaults
             n_iter = 250
-            logger.info(f"🚀 GPU-NATIVE SEARCH: Investigating {n_iter} possible brain architectures...")
-            patience = 50  # Stop early if no improvement in 50 tries
+            patience = 50
+            nfold = 5
+            lr_choices = [0.005, 0.01, 0.03, 0.05]
+            
+            if choice == "2":
+                n_iter, patience, nfold, lr_choices = 100, 20, 3, [0.01, 0.03, 0.05, 0.1]
+            elif choice == "3":
+                n_iter, patience, nfold, lr_choices = 25, 10, 2, [0.05, 0.1, 0.2]
+            elif choice == "4":
+                n_iter_input = input(f"Total Search Iterations (Current {n_iter}): ").strip()
+                if n_iter_input: n_iter = int(n_iter_input)
+                patience_input = input(f"Early Stopping Patience (Current {patience}): ").strip()
+                if patience_input: patience = int(patience_input)
+                nfold_input = input(f"Cross-Validation Folds (Current {nfold}): ").strip()
+                if nfold_input: nfold = int(nfold_input)
+            
+            logger.info(f"🚀 GPU-NATIVE SEARCH: Investigating {n_iter} possible brain architectures ({nfold}-Fold, Patience={patience})...")
             no_improvement_count = 0
             best_score = float('inf')  # minimizing logloss
             
@@ -143,7 +171,7 @@ def train_and_export_model():
                     'tree_method': 'hist',
                     'device': 'cuda',
                     'scale_pos_weight': scale_weight,
-                    'learning_rate': np.random.choice([0.005, 0.01, 0.03, 0.05]),
+                    'learning_rate': np.random.choice(lr_choices),
                     'max_depth': np.random.choice([4, 6, 8, 10, 12, 15]),
                     'subsample': np.random.uniform(0.6, 1.0),
                     'colsample_bytree': np.random.uniform(0.6, 1.0),
@@ -159,8 +187,8 @@ def train_and_export_model():
                     params,
                     dtrain,
                     num_boost_round=1000,
-                    nfold=5,
-                    early_stopping_rounds=50,
+                    nfold=nfold,
+                    early_stopping_rounds=patience,
                     verbose_eval=False
                 )
                 
