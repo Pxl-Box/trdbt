@@ -629,9 +629,9 @@ def show_settings():
                     
                     # Formatting
                     if 'closed_at' in df.columns:
-                        df['closed_at'] = pd.to_datetime(df['closed_at'], format='ISO8601', errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+                        df['closed_at'] = pd.to_datetime(df['closed_at'], errors='coerce', utc=True).dt.strftime('%Y-%m-%d %H:%M')
                     if 'opened_at' in df.columns:
-                        df['opened_at'] = pd.to_datetime(df['opened_at'], format='ISO8601', errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+                        df['opened_at'] = pd.to_datetime(df['opened_at'], errors='coerce', utc=True).dt.strftime('%Y-%m-%d %H:%M')
                     
                     # Ensure columns exist even if empty
                     for col in ['ticker', 'pnl', 'entry', 'exit', 'qty', 'reason', 'ai_win_prob', 'opened_at', 'closed_at']:
