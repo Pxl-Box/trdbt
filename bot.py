@@ -207,19 +207,34 @@ class TradingBot:
             logger.info("Lockdown complete. All positions liquidated. Bot LOCKED.")
             logger.info("Lockdown complete. All positions liquidated. Bot LOCKED.")
 
-    def _record_realised_pnl(self, ticker: str, entry: float, exit: float, qty: float, reason: str):
-        """Helper to record a closed trade's P&L in the state file."""
+    def _append_trade_history(self, ticker: str, entry: float, exit: float, qty: float, reason: str, ai_win_prob: float = None, opened_at: str = None):
+        """Helper to record a closed trade's P&L and metadata in trade_history.json."""
         try:
             pnl = round((exit - entry) * qty, 4) if entry > 0 else 0.0
-            self.state.setdefault("realised_pnl", []).append({
-                "ticker":    ticker,
-                "pnl":       pnl,
-                "entry":     round(entry, 4),
-                "exit":      round(exit, 4),
-                "qty":       qty,
-                "reason":    reason,
-                "closed_at": datetime.now(timezone.utc).isoformat(),
+            history_file = Path("trade_history.json")
+            history = []
+            if history_file.exists():
+                with open(history_file, "r") as f:
+                    try:
+                        history = json.load(f)
+                    except json.JSONDecodeError:
+                        pass
+            
+            history.append({
+                "ticker":      ticker,
+                "pnl":         pnl,
+                "entry":       round(entry, 4),
+                "exit":        round(exit, 4),
+                "qty":         qty,
+                "reason":      reason,
+                "ai_win_prob": ai_win_prob,
+                "opened_at":   opened_at,
+                "closed_at":   datetime.now(timezone.utc).isoformat(),
             })
+            
+            with open(history_file, "w") as f:
+                json.dump(history, f, indent=4)
+                
             logger.info(f"[{reason}] Realised P&L recorded: {ticker} -> £{pnl:+.4f}")
         except Exception as e:
             logger.warning(f"[{reason}] P&L recording failed for {ticker}: {e}")
@@ -325,8 +340,11 @@ class TradingBot:
                 # (it's just gone), so we use currentPrice as a proxy if it was in the snapshot,
                 # or just record it as closed.
                 exit_p = float(pos.get('currentPrice', entry)) if pos else entry
-                self._record_realised_pnl(
-                    short_ticker, entry, exit_p, float(trade.get("qty", 0)), "Stop Loss (External)"
+                self._append_trade_history(
+                    short_ticker, entry, exit_p, float(trade.get("qty", 0)), 
+                    "Stop Loss (External)",
+                    ai_win_prob=trade.get("ai_win_prob"),
+                    opened_at=trade.get("opened_at")
                 )
 
                 stale.append(short_ticker)
@@ -1146,13 +1164,14 @@ class TradingBot:
                 res = self.client.place_market_sell(t212_ticker, qty)
                 if res and res.get('id'):
                     logger.info(f"[vTP] {ticker} Market SELL submitted. ID: {res['id']}")
-                    # Record Realised P&L
-                    self._record_realised_pnl(
+                    self._append_trade_history(
                         ticker, 
                         float(trade.get("entry_price", 0)), 
                         current_p, 
                         float(qty), 
-                        "Virtual TP (Dynamic)" if trade.get("is_chasing") else "Virtual TP"
+                        "Virtual TP (Dynamic)" if trade.get("is_chasing") else "Virtual TP",
+                        ai_win_prob=trade.get("ai_win_prob"),
+                        opened_at=trade.get("opened_at")
                     )
 
                     del self.state["open_trades"][ticker]

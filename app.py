@@ -100,7 +100,7 @@ if api_key:
 
 @st.dialog("⚙️ Settings", width="large")
 def show_settings():
-    tab_api, tab_strategy, tab_risk, tab_ai, tab_watchlist, tab_discovery, tab_diag = st.tabs([
+    tab_api, tab_strategy, tab_risk, tab_ai, tab_watchlist, tab_discovery, tab_diag, tab_history = st.tabs([
         "📡 System & API",
         "📈 Core Strategy",
         "🛡️ Risk & Exits",
@@ -108,6 +108,7 @@ def show_settings():
         "📋 Watchlist",
         "🌎 Discovery",
         "🛠️ Diagnostics",
+        "📊 Performance"
     ])
 
     # ── 1. System & API ──────────────────────────────────────────────────
@@ -605,6 +606,91 @@ def show_settings():
                     st.success("No critical alerts in the last 24 hours.")
             except Exception:
                 st.error("Could not read logs for alerts.")
+
+    # ── 8. Trade History & Performance ────────────────────────────────────
+    with tab_history:
+        st.subheader("Trade History & Performance")
+        st.caption("Detailed view of all closed positions.")
+        
+        hist_file = Path("trade_history.json")
+        if hist_file.exists():
+            try:
+                with open(hist_file, "r") as f:
+                    trades = json.load(f)
+                
+                if trades:
+                    import pandas as pd
+                    df = pd.DataFrame(trades)
+                    
+                    # Formatting
+                    if 'closed_at' in df.columns:
+                        df['closed_at'] = pd.to_datetime(df['closed_at']).dt.strftime('%Y-%m-%d %H:%M')
+                    if 'opened_at' in df.columns:
+                        df['opened_at'] = pd.to_datetime(df['opened_at']).dt.strftime('%Y-%m-%d %H:%M')
+                    
+                    # Ensure columns exist even if empty
+                    for col in ['ticker', 'pnl', 'entry', 'exit', 'qty', 'reason', 'ai_win_prob', 'opened_at', 'closed_at']:
+                        if col not in df.columns:
+                            df[col] = None
+                            
+                    # Analytics
+                    total_trades = len(df)
+                    winning_trades = len(df[df['pnl'] > 0])
+                    win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
+                    total_pnl = df['pnl'].sum()
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Total Closed Trades", total_trades)
+                    c2.metric("Win Rate", f"{win_rate:.1f}%")
+                    c3.metric("Total Historical P&L", f"£{total_pnl:.2f}")
+                    
+                    st.markdown("---")
+                    
+                    # Display Table
+                    st.dataframe(
+                        df[['closed_at', 'ticker', 'pnl', 'reason', 'ai_win_prob', 'entry', 'exit', 'qty', 'opened_at']].sort_values(by='closed_at', ascending=False),
+                        use_container_width=True,
+                        column_config={
+                            "closed_at": "Closed",
+                            "ticker": "Ticker",
+                            "pnl": st.column_config.NumberColumn("P&L (£)", format="£%.2f"),
+                            "reason": "Exit Reason",
+                            "ai_win_prob": st.column_config.NumberColumn("AI Rank", format="%.2f"),
+                            "entry": st.column_config.NumberColumn("Entry", format="£%.2f"),
+                            "exit": st.column_config.NumberColumn("Exit", format="£%.2f"),
+                            "qty": "Qty",
+                            "opened_at": "Opened"
+                        },
+                        hide_index=True
+                    )
+                    
+                    # Exports
+                    st.markdown("### Export Data")
+                    e1, e2 = st.columns(2)
+                    
+                    csv = df.to_csv(index=False).encode('utf-8')
+                    e1.download_button(
+                        label="📥 Download CSV",
+                        data=csv,
+                        file_name="trade_history.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    
+                    e2.download_button(
+                        label="📥 Download JSON",
+                        data=json.dumps(trades, indent=4),
+                        file_name="trade_history.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                    
+                else:
+                    st.info("No trade history available yet.")
+            except Exception as e:
+                st.error(f"Error loading trade history: {e}")
+        else:
+            st.info("No trade history file found. History will appear here once the bot closes a position.")
 
 # ──────────────────────────────────────────────────────────────────────────
 # ⚙ Cog button — top-right corner
