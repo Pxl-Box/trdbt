@@ -26,8 +26,15 @@ class QuantInference:
 
         try:
             with open(self.model_path, "rb") as f:
-                self.model = pickle.load(f)
-            logger.info(f"[Quant] Successfully loaded AI Brain from {self.model_path}")
+                data = pickle.load(f)
+            
+            # Handle Metadata Wrapper (dict) vs Raw Booster
+            if isinstance(data, dict) and "model" in data:
+                self.model = data["model"]
+                logger.info(f"[Quant] Successfully loaded AI Brain (Score: {data.get('score', 'N/A')}) from {self.model_path}")
+            else:
+                self.model = data
+                logger.info(f"[Quant] Successfully loaded Raw AI Brain from {self.model_path}")
         except Exception as e:
             logger.error(f"[Quant] Failed to load AI model: {e}")
 

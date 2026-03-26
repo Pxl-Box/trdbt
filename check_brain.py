@@ -15,13 +15,19 @@ try:
     
     print(f"Object Type: {type(model)}")
     
-    # Check if it's a dict (common for meta-saving)
+    # Check if it's a dict (metadata wrapper)
     if isinstance(model, dict):
-        print(f"Dictionary keys: {model.keys()}")
-        # If model is inside the dict, swap to it
+        print(f"--- Brain Metadata Found ---")
+        print(f"SCORE (Logloss): {model.get('score', 'N/A')}")
+        print(f"TRAINED AT: {model.get('timestamp', 'N/A')}")
+        print(f"FEATURE COUNT: {model.get('feature_count', 'N/A')}")
+        if 'hyperparams' in model:
+            print(f"HYPERPARAMS: {model['hyperparams']}")
+        
+        # Extract model and continue analysis
         if 'model' in model:
             model = model['model']
-            print(f"Switched to internal 'model' key. New type: {type(model)}")
+            print(f"--- Internal Model Loaded ---")
 
     # Attempt to extract feature names
     features = []

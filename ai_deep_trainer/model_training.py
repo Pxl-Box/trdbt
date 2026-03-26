@@ -192,15 +192,27 @@ def train_and_export_model():
         final_model_native = xgb.train(best_params, dtrain, num_boost_round=best_params.get('n_estimators', 500))
         
         # Export Model (Pickling the native Booster object directly)
+        # Prepare Metadata Wrapper
+        brain_data = {
+            "model": final_model_native,
+            "score": float(best_score),
+            "timestamp": datetime.now().isoformat(),
+            "feature_count": len(X.columns),
+            "features": list(X.columns),
+            "hyperparams": best_params
+        }
+        
+        # Export Model
         export_path = MODELS_DIR / "ai_brain_v1.pkl"
         backup_path = MODELS_DIR / f"ai_brain_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
         
         with open(export_path, 'wb') as f:
-            pickle.dump(final_model_native, f)
+            pickle.dump(brain_data, f)
         with open(backup_path, 'wb') as f:
-            pickle.dump(final_model_native, f)
+            pickle.dump(brain_data, f)
             
         logger.info(f"✅ EXTREME SUCCESS: GPU-Native Brain exported to {export_path}")
+        logger.info(f"📊 BEST CV SCORE: {best_score:.4f} (Logloss)")
         logger.info(f"✅ CPU check: Should be idling. GPU check: Should have been pinned.")
         logger.info("Sleeping for 12 hours.")
         time.sleep(43200)
