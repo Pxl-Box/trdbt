@@ -329,9 +329,11 @@ def show_settings():
     with tab_ai:
         st.subheader("🤖 AI Inference Engine")
         new_quant_sizing = st.toggle("Enable Kelly Criterion Sizing (Tri-Node Architecture)",
-                                     value=bool(config.get("quant_sizing_enabled", False)))
-        st.caption("When enabled, bypasses static Risk/Trade % and dynamically sizes bets using Kelly Criterion.")
+                                     value=bool(config.get("quant_sizing_enabled", True)))
+        st.caption("When enabled, bypasses static Risk/Trade % and dynamically sizes bets using Kelly Criterion based on AI confidence.")
         
+        if new_quant_sizing:
+            st.info("💡 **Kelly Tip:** Quarter Kelly (0.25) is the safest starting point. Only increase once you have 50+ trades of data in the Performance tab to validate the AI's Win Rate.")
         kf_idx = 1
         kelly_opts = {
             "1.0 (Full Kelly - Max Risk)": 1.0, 
@@ -346,6 +348,12 @@ def show_settings():
 
         sel_kf = st.selectbox("Kelly Fraction Calibration", labels, index=kf_idx)
         new_kelly_frac = kelly_opts[sel_kf]
+
+        new_ai_min_conf = st.slider(
+            "Minimum AI Confidence to Trade (%)", min_value=50, max_value=90,
+            value=int(float(config.get("ai_min_confidence", 0.65)) * 100),
+            help="Bot will SKIP a trade if the AI win probability is below this threshold. Higher = fewer but higher quality trades."
+        ) / 100.0
 
         st.markdown("---")
         st.subheader("Brain File path")
@@ -364,6 +372,7 @@ def show_settings():
             config.update({
                 "quant_sizing_enabled": new_quant_sizing,
                 "kelly_fraction": new_kelly_frac,
+                "ai_min_confidence": new_ai_min_conf,
                 "ml_model_path": new_quant_path
             })
             save_config(config)

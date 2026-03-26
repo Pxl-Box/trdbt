@@ -1364,9 +1364,15 @@ class TradingBot:
                 elif self.already_in_trade(ticker, open_positions, active_orders):
                     pass
                 else:
-                    score = self.score_signal(signal_data)
-                    buy_candidates.append((score, ticker, signal_data))
-                    logger.info(f"[{ticker}] BUY queued | score={score:.2f}")
+                    # Enforce minimum AI confidence threshold
+                    ai_prob = signal_data.get("ai_win_prob")
+                    ai_min_conf = float(self.config.get("ai_min_confidence", 0.0))
+                    if ai_prob is not None and ai_min_conf > 0.0 and ai_prob < ai_min_conf:
+                        logger.info(f"[{ticker}] 🧠 AI Gating: Confidence {ai_prob:.1%} < threshold {ai_min_conf:.1%}. Skipping low-conviction trade.")
+                    else:
+                        score = self.score_signal(signal_data)
+                        buy_candidates.append((score, ticker, signal_data))
+                        logger.info(f"[{ticker}] BUY queued | score={score:.2f}")
 
             elif signal == "SELL":
                 sell_tickers.append(ticker)
