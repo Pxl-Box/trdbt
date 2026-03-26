@@ -207,7 +207,22 @@ class TradingBot:
             logger.info("Lockdown complete. All positions liquidated. Bot LOCKED.")
             logger.info("Lockdown complete. All positions liquidated. Bot LOCKED.")
 
-    #  Error Helpers
+    def _record_realised_pnl(self, ticker: str, entry: float, exit: float, qty: float, reason: str):
+        """Helper to record a closed trade's P&L in the state file."""
+        try:
+            pnl = round((exit - entry) * qty, 4) if entry > 0 else 0.0
+            self.state.setdefault("realised_pnl", []).append({
+                "ticker":    ticker,
+                "pnl":       pnl,
+                "entry":     round(entry, 4),
+                "exit":      round(exit, 4),
+                "qty":       qty,
+                "reason":    reason,
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info(f"[{reason}] Realised P&L recorded: {ticker} -> £{pnl:+.4f}")
+        except Exception as e:
+            logger.warning(f"[{reason}] P&L recording failed for {ticker}: {e}")
 
     def is_equity_not_owned_error(self, res: dict) -> bool:
         """
@@ -302,6 +317,18 @@ class TradingBot:
             pos  = live_by_t212.get(t212)
             # Remove if position is missing from API or has zero quantity
             if not pos or float(pos.get('quantity', 0)) <= 0:
+                logger.info(f"[sync] {short_ticker} position closed externally (likely SL hit).")
+                
+                # Record P&L before deleting
+                entry = float(trade.get("entry_price", 0))
+                # We don't have the exact exit price from the API's 'historical' position 
+                # (it's just gone), so we use currentPrice as a proxy if it was in the snapshot,
+                # or just record it as closed.
+                exit_p = float(pos.get('currentPrice', entry)) if pos else entry
+                self._record_realised_pnl(
+                    short_ticker, entry, exit_p, float(trade.get("qty", 0)), "Stop Loss (External)"
+                )
+
                 stale.append(short_ticker)
                 del open_trades[short_ticker]
 
@@ -839,10 +866,29 @@ class TradingBot:
                 else:
                     logger.warning(f"[{ticker}] Could not cancel {label} order {order_id}  may have triggered.")
 
-        # Market sell
+                # Submit Sell
         res = self.client.place_market_sell(t212_ticker, qty)
         if res and res.get('id'):
-            logger.info(f"[{ticker}] Market SELL submitted. Order ID: {res['id']}")
+            logger.info(f"[sell] Market SELL submitted for {ticker}. Order ID: {res['id']}")
+            
+            # Record P&L
+            entry = float(trade.get("entry_price", 0))
+            # Get current price as exit price proxy
+            exit_p = entry
+            try:
+                # Attempt to get fresh price for P&L accuracy
+                ticker_only = ticker.split("_")[0]
+                ticker_info = yf.Ticker(ticker_only).fast_info
+                exit_p = ticker_info.last_price
+            except: pass
+
+            self._record_realised_pnl(ticker, entry, exit_p, qty, reason)
+            
+            del open_trades[ticker]
+            self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
+            self.save_state()
+            return True
+
         else:
             logger.error(f"[{ticker}] Market SELL failed: {res}. MANUAL CLOSE REQUIRED.")
 
@@ -1101,22 +1147,13 @@ class TradingBot:
                 if res and res.get('id'):
                     logger.info(f"[vTP] {ticker} Market SELL submitted. ID: {res['id']}")
                     # Record Realised P&L
-                    try:
-                        _ent = float(trade.get("entry_price", 0))
-                        _qt  = float(qty)
-                        _rpnl = round((current_p - _ent) * _qt, 4) if _ent > 0 else 0.0
-                        self.state.setdefault("realised_pnl", []).append({
-                            "ticker":    ticker,
-                            "pnl":       _rpnl,
-                            "entry":     round(_ent, 4),
-                            "exit":      round(current_p, 4),
-                            "qty":       _qt,
-                            "reason":    "Virtual TP (Dynamic)" if trade.get("is_chasing") else "Virtual TP",
-                            "closed_at": datetime.now(timezone.utc).isoformat(),
-                        })
-                        logger.info(f"[vTP] Realised P&L: {ticker} -> £{_rpnl:+.4f}")
-                    except Exception as _pnl_err:
-                        logger.warning(f"[vTP] P&L recording failed for {ticker}: {_pnl_err}")
+                    self._record_realised_pnl(
+                        ticker, 
+                        float(trade.get("entry_price", 0)), 
+                        current_p, 
+                        float(qty), 
+                        "Virtual TP (Dynamic)" if trade.get("is_chasing") else "Virtual TP"
+                    )
 
                     del self.state["open_trades"][ticker]
                     self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()

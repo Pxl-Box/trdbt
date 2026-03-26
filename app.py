@@ -589,7 +589,7 @@ def show_settings():
                 alerts = []
                 now = datetime.datetime.now()
                 for line in reversed(lines):
-                    if " - ERROR - " in line or " - CRITICAL - " in line:
+                    if " - ERROR - " in line or " - CRITICAL - " in line or " - WARNING - " in line:
                         try:
                             ts = datetime.datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
                             if (now - ts).total_seconds() < 86400:
