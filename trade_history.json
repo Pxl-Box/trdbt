@@ -1,0 +1,112 @@
+[
+    {
+        "ticker": "TK0_US_EQ",
+        "pnl": 42.8159,
+        "entry": 47.0749,
+        "exit": 51.958,
+        "qty": 8.7681,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.5798,
+        "opened_at": "2026-03-25T02:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK1_US_EQ",
+        "pnl": 4.6679,
+        "entry": 121.4149,
+        "exit": 122.9529,
+        "qty": 3.035,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.5671,
+        "opened_at": "2026-03-25T06:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK2_US_EQ",
+        "pnl": 82.3992,
+        "entry": 20.2961,
+        "exit": 34.5397,
+        "qty": 5.785,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.6308,
+        "opened_at": "2026-03-24T21:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK3_US_EQ",
+        "pnl": 0.0615,
+        "entry": 192.1393,
+        "exit": 192.167,
+        "qty": 2.223,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.7273,
+        "opened_at": "2026-03-26T01:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK4_US_EQ",
+        "pnl": 88.3312,
+        "entry": 99.2421,
+        "exit": 112.915,
+        "qty": 6.4603,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.7208,
+        "opened_at": "2026-03-25T17:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK5_US_EQ",
+        "pnl": 80.6122,
+        "entry": 49.9333,
+        "exit": 60.4461,
+        "qty": 7.668,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.8925,
+        "opened_at": "2026-03-25T11:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK6_US_EQ",
+        "pnl": -27.456,
+        "entry": 140.9842,
+        "exit": 136.9811,
+        "qty": 6.8587,
+        "reason": "Stop Loss",
+        "ai_win_prob": 0.5188,
+        "opened_at": "2026-03-26T17:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK7_US_EQ",
+        "pnl": 55.8948,
+        "entry": 147.3624,
+        "exit": 155.3293,
+        "qty": 7.0159,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.806,
+        "opened_at": "2026-03-25T13:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK8_US_EQ",
+        "pnl": -19.4056,
+        "entry": 112.9812,
+        "exit": 110.0668,
+        "qty": 6.6586,
+        "reason": "Stop Loss",
+        "ai_win_prob": 0.7353,
+        "opened_at": "2026-03-26T01:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    },
+    {
+        "ticker": "TK9_US_EQ",
+        "pnl": 84.8328,
+        "entry": 167.7126,
+        "exit": 204.7486,
+        "qty": 2.2905,
+        "reason": "Virtual TP",
+        "ai_win_prob": 0.7409,
+        "opened_at": "2026-03-24T19:57:32.174102",
+        "closed_at": "2026-03-26T19:57:32.174102"
+    }
+]
