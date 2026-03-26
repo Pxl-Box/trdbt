@@ -83,6 +83,9 @@ class TradingBot:
         # Used to prevent phantom positions being re-imported by sync_open_trades
         # and causing an infinite "selling-equity-not-owned" retry loop.
         self.purged_tickers: set = set()
+        
+        # Tracker for persistent yfinance data failures (e.g. delisted tickers)
+        self.failed_data_count: dict = {}
 
         # Initialize AI Inference engine with config-defined path
         model_path = self.config.get("ml_model_path", None)
@@ -1299,14 +1302,28 @@ class TradingBot:
                 logger.info(f"[{ticker}] Market closed. Skipping.")
                 continue
 
-            logger.info(f"Analyzing {ticker}...")
+            #  Fetch Data 
             try:
+                # Check for persistent failures (e.g. delisted tickers like DMYI)
+                fail_streak = self.failed_data_count.get(ticker, 0)
+                if fail_streak >= 5:
+                    logger.warning(f"[{ticker}] skipping analysis — failed {fail_streak} consecutive data pulls. Check if delisted.")
+                    continue
+
+                # Assuming strategy.analyze internally calls get_ticker_data or similar
+                # If get_ticker_data is a separate step, it should be called here.
+                # For now, we'll assume analyze handles data fetching and can fail.
+                
+                logger.info(f"Analyzing {ticker}...")
                 signal_data = self.strategy.analyze(
                     ticker, 
                     quant_engine=getattr(self, 'quant_engine', None),
                     benchmarks_1d=benchmark_dfs_1d,
                     benchmarks_15m=benchmark_dfs_15m
                 )
+                
+                # If we get here, data pull (and analysis) succeeded
+                self.failed_data_count[ticker] = 0
                 
                 # Treat 'NEUTRAL' signals (which represent NaN/no data) as analysis errors 
                 # so they increment error_count and get paused if persistent.
@@ -1322,6 +1339,9 @@ class TradingBot:
                 health["error_count"] = 0
                 health["is_paused"] = False
             except Exception as e:
+                self.failed_data_count[ticker] = self.failed_data_count.get(ticker, 0) + 1
+                logger.error(f"[{ticker}] Data fetch/analysis failure ({self.failed_data_count[ticker]}/5): {e}")
+
                 health["error_count"] = health.get("error_count", 0) + 1
                 health["last_error"]  = str(e)
                 if health["error_count"] >= 3:
@@ -1453,9 +1473,9 @@ class TradingBot:
             interval = self.config.get("cycle_interval_secs", 900)  # default 15 min
             logger.info(f"Next cycle in {interval}s ({interval//60}m {interval%60}s).")
 
-            # Heartbeat: check Virtual TPs according to config (default 30s)
+            # Heartbeat: check Virtual TPs according to config (default 60s to avoid 429)
             # Fetch positions once per heartbeat to stay efficient.
-            heartbeat_secs = self.config.get("heartbeat_interval_secs", 30)
+            heartbeat_secs = self.config.get("heartbeat_interval_secs", 60)
             elapsed = 0
             while elapsed < interval:
                 time.sleep(heartbeat_secs)

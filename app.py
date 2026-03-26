@@ -304,6 +304,10 @@ def show_settings():
             tp_mode = st.selectbox("Take Profit Target", tp_modes,
                                    index=tp_modes.index(config.get("tp_target_mode", "Fixed: Mean (Middle BB)")) if config.get("tp_target_mode", "Fixed: Mean (Middle BB)") in tp_modes else 1)
             tp_atr_mult = st.number_input("Take Profit (Target ATR Fallback)", value=float(config.get("tp_atr_multiplier", 2.0)), step=0.1)
+            
+            new_heartbeat = st.slider("Heartbeat Interval (secs)", 30, 300, 
+                                     value=int(config.get("heartbeat_interval_secs", 60)),
+                                     help="How often the bot checks TP/SL. Increase to 60-120s if getting 429 Rate Limit errors.")
 
             if st.button("💾 Save Risk Settings", use_container_width=True):
                 config.update({
@@ -316,6 +320,7 @@ def show_settings():
                     "trailing_sl_tier2_atr": tier2,
                     "tp_target_mode": tp_mode,
                     "tp_atr_multiplier": tp_atr_mult,
+                    "heartbeat_interval_secs": new_heartbeat,
                 })
                 save_config(config)
                 st.success("✅ Risk Saved.")
@@ -684,6 +689,18 @@ def show_settings():
                         mime="application/json",
                         use_container_width=True
                     )
+                    
+                    st.markdown("---")
+                    st.subheader("🗑️ Reset Data")
+                    confirm = st.checkbox("I understand this will permanently delete all trade history.")
+                    if st.button("Delete All Trade History", type="primary", disabled=not confirm, use_container_width=True):
+                        try:
+                            with open(hist_file, "w") as f:
+                                json.dump([], f)
+                            st.success("History cleared! Refresh the page to see changes.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to reset: {e}")
                     
                 else:
                     st.info("No trade history available yet.")
