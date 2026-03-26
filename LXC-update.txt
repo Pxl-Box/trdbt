@@ -1,0 +1,7 @@
+1. Update script
+git pull
+systemctl restart tradingbot tradingui
+
+
+2. log script
+journalctl -u tradingbot -f
