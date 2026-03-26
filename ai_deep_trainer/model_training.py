@@ -210,6 +210,25 @@ def train_and_export_model():
                 if no_improvement_count >= patience:
                     logger.info(f"🛑 EARLY STOPPING: No improvement for {patience} iterations. Keeping the best brain.")
                     break
+                
+                # 💾 Checkpoint: Save the best brain so far every 50 iterations
+                if best_params and (i + 1) % 50 == 0:
+                    try:
+                        ckpt_model = xgb.train(best_params, dtrain, num_boost_round=best_params.get('n_estimators', 500))
+                        ckpt_data = {
+                            "model": ckpt_model,
+                            "score": float(best_score),
+                            "timestamp": datetime.now().isoformat(),
+                            "feature_count": len(X.columns),
+                            "features": list(X.columns),
+                            "hyperparams": best_params
+                        }
+                        ckpt_path = MODELS_DIR / f"ai_brain_checkpoint_iter{i+1}.pkl"
+                        with open(ckpt_path, 'wb') as f:
+                            pickle.dump(ckpt_data, f)
+                        logger.info(f"💾 Checkpoint saved at iteration {i+1} | Score: {best_score:.4f} -> {ckpt_path.name}")
+                    except Exception as ckpt_err:
+                        logger.warning(f"⚠️ Checkpoint save failed at iter {i+1}: {ckpt_err}")
             
             logger.info(f"🏆 Best Architecture Selected: {best_params}")
         else:
