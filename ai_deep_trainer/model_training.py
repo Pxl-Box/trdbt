@@ -130,10 +130,9 @@ def train_and_export_model():
         }
 
         if is_turbo:
-            logger.info("🚀 GPU-NATIVE SEARCH: Investigating 100 possible brain architectures...")
-            
-            n_iter = 100
-            patience = 20  # Stop early if no improvement in 20 tries
+            n_iter = 250
+            logger.info(f"🚀 GPU-NATIVE SEARCH: Investigating {n_iter} possible brain architectures...")
+            patience = 50  # Stop early if no improvement in 50 tries
             no_improvement_count = 0
             best_score = float('inf')  # minimizing logloss
             
@@ -144,11 +143,14 @@ def train_and_export_model():
                     'tree_method': 'hist',
                     'device': 'cuda',
                     'scale_pos_weight': scale_weight,
-                    'learning_rate': np.random.choice([0.01, 0.03, 0.05, 0.1]),
-                    'max_depth': np.random.choice([6, 8, 10, 12]),
-                    'subsample': np.random.uniform(0.7, 1.0),
-                    'colsample_bytree': np.random.uniform(0.7, 1.0),
+                    'learning_rate': np.random.choice([0.005, 0.01, 0.03, 0.05]),
+                    'max_depth': np.random.choice([4, 6, 8, 10, 12, 15]),
+                    'subsample': np.random.uniform(0.6, 1.0),
+                    'colsample_bytree': np.random.uniform(0.6, 1.0),
                     'gamma': np.random.uniform(0, 0.5),
+                    'reg_alpha': np.random.choice([0, 0.01, 0.1, 1.0]),
+                    'reg_lambda': np.random.choice([1, 5, 10]),
+                    'min_child_weight': np.random.choice([1, 5, 10]),
                     'eval_metric': 'logloss'
                 }
                 
@@ -157,8 +159,8 @@ def train_and_export_model():
                     params,
                     dtrain,
                     num_boost_round=1000,
-                    nfold=3,
-                    early_stopping_rounds=20,
+                    nfold=5,
+                    early_stopping_rounds=50,
                     verbose_eval=False
                 )
                 
