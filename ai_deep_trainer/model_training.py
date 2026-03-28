@@ -182,12 +182,13 @@ def train_and_export_model():
                     'eval_metric': 'logloss'
                 }
                 
-                # Cross-validation handled natively on GPU
+                # Time-Series Cross-Validation to prevent look-ahead bias
+                tscv = TimeSeriesSplit(n_splits=nfold)
                 cv_results = xgb.cv(
                     params,
                     dtrain,
                     num_boost_round=1000,
-                    nfold=nfold,
+                    folds=list(tscv.split(X)),
                     early_stopping_rounds=patience,
                     verbose_eval=False
                 )
@@ -237,14 +238,32 @@ def train_and_export_model():
         logger.info("⚡ Training final Deployment Brain on GPU...")
         final_model_native = xgb.train(best_params, dtrain, num_boost_round=best_params.get('n_estimators', 500))
         
+        # --- Feature Pruning (Noise Reduction) ---
+        importance = final_model_native.get_score(importance_type='gain')
+        zero_importance = [f for f in X.columns if f not in importance]
+        
+        if zero_importance:
+            logger.info(f"✂️ PRUNING {len(zero_importance)} dead features with 0 gain (e.g., {zero_importance[:3]}...)")
+            kept_features = [f for f in X.columns if f in importance]
+            
+            # Re-train only on important features
+            X_pruned = X[kept_features]
+            dtrain_pruned = xgb.DMatrix(X_pruned, label=y)
+            logger.info(f"♻️ Re-training clean model on {len(kept_features)} critical features...")
+            final_model_native = xgb.train(best_params, dtrain_pruned, num_boost_round=best_params.get('n_estimators', 500))
+            final_feature_list = kept_features
+        else:
+            final_feature_list = list(X.columns)
+            logger.info("✅ All features showed positive gain. No pruning required.")
+        
         # Export Model (Pickling the native Booster object directly)
         # Prepare Metadata Wrapper
         brain_data = {
             "model": final_model_native,
             "score": float(best_score),
             "timestamp": datetime.now().isoformat(),
-            "feature_count": len(X.columns),
-            "features": list(X.columns),
+            "feature_count": len(final_feature_list),
+            "features": final_feature_list,
             "hyperparams": best_params
         }
         

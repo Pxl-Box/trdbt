@@ -337,12 +337,14 @@ class TradingBot:
             if not pos or float(pos.get('quantity', 0)) <= 0:
                 logger.info(f"[sync] {short_ticker} position closed externally (likely SL hit).")
                 
-                # Record P&L before deleting
+                # Record P&L before deleting.
+                # Best proxy for the exit price when a SL hits externally:
+                # 1) The tracked sl_price (most accurate — that's what T212 sold at)
+                # 2) currentPrice from the last snapshot (if position still visible)
+                # 3) Fall back to entry price (records £0, better than crashing)
                 entry = float(trade.get("entry_price", 0))
-                # We don't have the exact exit price from the API's 'historical' position 
-                # (it's just gone), so we use currentPrice as a proxy if it was in the snapshot,
-                # or just record it as closed.
-                exit_p = float(pos.get('currentPrice', entry)) if pos else entry
+                exit_p = float(trade.get("sl_price", 0)) or \
+                         (float(pos.get('currentPrice', 0)) if pos else 0) or entry
                 self._append_trade_history(
                     short_ticker, entry, exit_p, float(trade.get("qty", 0)), 
                     "Stop Loss (External)",
@@ -860,7 +862,7 @@ class TradingBot:
         logger.warning(f"[fill] Timeout waiting for order {order_id} ({t212_ticker}) to fill.")
         return False
 
-    def handle_sell(self, ticker: str):
+    def handle_sell(self, ticker: str, reason: str = "SELL Signal"):
         """
         Close position at market, cancel associated SL and TP orders.
         """
@@ -875,7 +877,7 @@ class TradingBot:
         tp_id       = trade.get("tp_order_id")
 
         logger.info(
-            f"[{ticker}] SELL signal  closing position "
+            f"[{ticker}] {reason} — closing position "
             f"(Qty={qty} @ market, cancelling SL={sl_id}, TP={tp_id})"
         )
 
@@ -885,26 +887,31 @@ class TradingBot:
                 if self.client.cancel_order(order_id):
                     logger.info(f"[{ticker}] {label} order {order_id} cancelled.")
                 else:
-                    logger.warning(f"[{ticker}] Could not cancel {label} order {order_id}  may have triggered.")
+                    logger.warning(f"[{ticker}] Could not cancel {label} order {order_id} — may have triggered.")
 
-                # Submit Sell
+        # Submit Sell
         res = self.client.place_market_sell(t212_ticker, qty)
         if res and res.get('id'):
             logger.info(f"[sell] Market SELL submitted for {ticker}. Order ID: {res['id']}")
-            
-            # Record P&L
+
+            # Record P&L — try to get live price, fall back to SL price, then entry
             entry = float(trade.get("entry_price", 0))
-            # Get current price as exit price proxy
-            exit_p = entry
+            exit_p = 0.0
             try:
-                # Attempt to get fresh price for P&L accuracy
                 ticker_only = ticker.split("_")[0]
                 ticker_info = yf.Ticker(ticker_only).fast_info
-                exit_p = ticker_info.last_price
-            except: pass
+                exit_p = float(ticker_info.last_price or 0)
+            except Exception:
+                pass
+            if not exit_p:
+                exit_p = float(trade.get("sl_price", 0)) or entry
 
-            self._record_realised_pnl(ticker, entry, exit_p, qty, reason)
-            
+            self._append_trade_history(
+                ticker, entry, exit_p, float(qty), reason,
+                ai_win_prob=trade.get("ai_win_prob"),
+                opened_at=trade.get("opened_at")
+            )
+
             del open_trades[ticker]
             self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
             self.save_state()
@@ -912,10 +919,10 @@ class TradingBot:
 
         else:
             logger.error(f"[{ticker}] Market SELL failed: {res}. MANUAL CLOSE REQUIRED.")
-
-        del open_trades[ticker]
-        self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
-        self.save_state()
+            # Still clean up local state to avoid re-selling on next cycle
+            del open_trades[ticker]
+            self.state.setdefault("cooldowns", {})[ticker] = datetime.now(timezone.utc).isoformat()
+            self.save_state()
 
     #  Market Hours Guard 
 
@@ -1325,10 +1332,12 @@ class TradingBot:
                 # If we get here, data pull (and analysis) succeeded
                 self.failed_data_count[ticker] = 0
                 
-                # Treat 'NEUTRAL' signals (which represent NaN/no data) as analysis errors 
-                # so they increment error_count and get paused if persistent.
+                # NEUTRAL = not enough data or indicator failure — skip gracefully.
+                # Do NOT count these as errors; data gaps are transient and should
+                # not cause the ticker to be paused or crash the cycle.
                 if signal_data.get("signal") == "NEUTRAL":
-                    raise ValueError(f"Invalid data or calculation failed: {signal_data.get('reason', 'Unknown')}")
+                    logger.info(f"[{ticker}] NEUTRAL signal ({signal_data.get('reason', 'Unknown')}). Skipping.")
+                    continue
                 
                 # [AI Visibility] Log the win probability for the user dashboard
                 ai_prob = signal_data.get('ai_win_prob')

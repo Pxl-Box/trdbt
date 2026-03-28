@@ -121,10 +121,10 @@ def generate_base_features(df: pd.DataFrame, timeframe_label: str) -> pd.DataFra
 
 BENCHMARKS_DIR = BASE_DIR / "benchmarks"
 
-def load_benchmark_returns(interval: str = "1d") -> dict:
+def load_benchmark_data(interval: str = "1d") -> dict:
     """
     Loads pre-downloaded benchmark parquets and returns a dict of
-    {ticker: pd.Series} capturing the 1-bar log return for each benchmark.
+    {ticker: pd.DataFrame} capturing the full OHLCV data for each benchmark.
     """
     benchmarks = {}
     for bm in ["SPY", "QQQ", "IWM"]:
@@ -141,8 +141,7 @@ def load_benchmark_returns(interval: str = "1d") -> dict:
             else:
                 df.index = df.index.tz_convert("UTC")
             df = df.sort_index()
-            ret = np.log(df["close"] / df["close"].shift(1))
-            benchmarks[bm] = ret
+            benchmarks[bm] = df
         except Exception as e:
             logger.error(f"[Benchmark] Could not load {bm}: {e}")
     return benchmarks
@@ -180,7 +179,8 @@ def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: 
         ticker_ret_1d.index = feats_1d.index  # align
 
         srs_1d_cols = []
-        for bm_name, bm_ret in benchmarks_1d.items():
+        for bm_name, bm_df in benchmarks_1d.items():
+            bm_ret = np.log(bm_df["close"] / bm_df["close"].shift(1))
             # Normalise benchmark index to UTC to guarantee alignment
             bm_ret_utc = bm_ret.copy()
             if bm_ret_utc.index.tz is None:
@@ -191,13 +191,34 @@ def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: 
             col = f"ret_vs_{bm_name.lower()}_1d"
             feats_1d[col] = (ticker_ret_1d - bm_aligned).fillna(0)  # 0 = neutral if missing
             srs_1d_cols.append(col)
+            
+        # ── Market Regime Context (SPY) — 1d ─────────────────────────────
+        if "SPY" in benchmarks_1d:
+            spy_df = benchmarks_1d["SPY"].copy()
+            if spy_df.index.tz is None:
+                spy_df.index = spy_df.index.tz_localize("UTC")
+            else:
+                spy_df.index = spy_df.index.tz_convert("UTC")
+            spy_aligned = spy_df.reindex(feats_1d.index, method="ffill")
+            
+            spy_sma200 = spy_aligned["close"].rolling(window=200).mean()
+            feats_1d["spy_dist_sma200_1d"] = ((spy_aligned["close"] - spy_sma200) / spy_sma200).fillna(0)
+            feats_1d["spy_rsi_14_1d"] = calculate_rsi(spy_aligned["close"], period=14).fillna(50)
+            
+            spy_ret = np.log(spy_aligned["close"] / spy_aligned["close"].shift(1))
+            feats_1d["spy_volatility_1d"] = spy_ret.rolling(window=20).std().fillna(0)
+        else:
+            feats_1d["spy_dist_sma200_1d"] = 0.0
+            feats_1d["spy_rsi_14_1d"] = 50.0
+            feats_1d["spy_volatility_1d"] = 0.0
 
         # ── Sector-Relative Strength (SRS) — 15m ─────────────────────────
         ticker_ret_15m = np.log(df_15m["close"] / df_15m["close"].shift(1))
         ticker_ret_15m.index = feats_15m.index
 
         srs_15m_cols = []
-        for bm_name, bm_ret in benchmarks_15m.items():
+        for bm_name, bm_df in benchmarks_15m.items():
+            bm_ret = np.log(bm_df["close"] / bm_df["close"].shift(1))
             bm_ret_utc = bm_ret.copy()
             if bm_ret_utc.index.tz is None:
                 bm_ret_utc.index = bm_ret_utc.index.tz_localize("UTC")
@@ -231,10 +252,35 @@ def process_and_stitch_ticker(ticker: str, benchmarks_1d: dict, benchmarks_15m: 
             direction="backward"
         )
         
-        # ── Target Label ──────────────────────────────────────────────────
-        # Is the profit > 1% within the next 26 candles (1 full trading day)?
-        future_return = (df_15m["close"].shift(-26) - df_15m["close"]) / df_15m["close"]
-        stitched["target_win"] = (future_return > 0.01).astype(int)
+        # -- Target Label (Path-Aware) --
+        # A trade is a WIN only if the +1% profit target is hit BEFORE the
+        # -1.5% stop-loss within the next 26 candles (approx 1 trading day).
+        # The old naive label caused the model to be confidently wrong on
+        # volatile stocks that hit the SL before eventually recovering.
+        tp_pct  = 0.01
+        sl_pct  = 0.015
+        horizon = 26
+
+        closes = df_15m["close"]
+        win_labels = []
+        for i in range(len(closes)):
+            if i + horizon >= len(closes):
+                win_labels.append(float("nan"))
+                continue
+            entry_p      = closes.iloc[i]
+            tp_target    = entry_p * (1 + tp_pct)
+            sl_target    = entry_p * (1 - sl_pct)
+            future_slice = closes.iloc[i + 1 : i + 1 + horizon]
+            tp_hit = next((j for j, p in enumerate(future_slice) if p >= tp_target), None)
+            sl_hit = next((j for j, p in enumerate(future_slice) if p <= sl_target), None)
+            if tp_hit is None:
+                win_labels.append(0)
+            elif sl_hit is None:
+                win_labels.append(1)
+            else:
+                win_labels.append(1 if tp_hit < sl_hit else 0)
+
+        stitched["target_win"] = win_labels
         
         # Fill ANY remaining NaN in the stitched frame with 0 — this is the
         # safety net that guarantees benchmark misalignments never wipe rows.
@@ -264,9 +310,9 @@ def process_all_files():
         return
 
     # Pre-load benchmark returns once — shared across all tickers for speed
-    logger.info("Loading benchmark return series (SPY, QQQ, IWM)...")
-    benchmarks_1d  = load_benchmark_returns(interval="1d")
-    benchmarks_15m = load_benchmark_returns(interval="15m")
+    logger.info("Loading benchmark series (SPY, QQQ, IWM)...")
+    benchmarks_1d  = load_benchmark_data(interval="1d")
+    benchmarks_15m = load_benchmark_data(interval="15m")
     
     raw_files = list(RAW_DATA_DIR.glob("*.parquet"))
     tickers = set()

@@ -96,12 +96,31 @@ class MeanReversionStrategy:
             else:
                 df[f'ret_vs_{bm_name.lower()}'] = 0.0
 
+        # Market Regime Context (SPY)
+        if benchmark_dfs and 'SPY' in benchmark_dfs and not benchmark_dfs['SPY'].empty:
+            spy_df = benchmark_dfs['SPY']
+            spy_aligned = spy_df.reindex(df.index, method='ffill')
+            
+            spy_sma200 = spy_aligned['Close'].rolling(window=200).mean()
+            df['spy_dist_sma200'] = ((spy_aligned['Close'] - spy_sma200) / spy_sma200).fillna(0)
+            
+            df['spy_rsi_14'] = ta.rsi(spy_aligned['Close'], length=14)
+            df['spy_rsi_14'] = df['spy_rsi_14'].fillna(50.0)
+            
+            spy_ret = np.log(spy_aligned['Close'] / spy_aligned['Close'].shift(1))
+            df['spy_volatility'] = spy_ret.rolling(window=20).std().fillna(0)
+        else:
+            df['spy_dist_sma200'] = 0.0
+            df['spy_rsi_14'] = 50.0
+            df['spy_volatility'] = 0.0
+
         # STRICT COLUMN LIST (Must match brain's training features exactly)
         feature_order = [
             'ret_1_bar', 'ret_5_bar', 'ret_20_bar', 'dist_sma_20', 'dist_sma_50',
             'rsi_14', 'rsi_7', 'macd', 'macd_signal', 'macd_hist', 'macd_trend',
             'bar_range_pct', 'volatility_20', 'bb_width', 'atr_pct', 'vol_surge',
-            'ret_vs_spy', 'ret_vs_qqq', 'ret_vs_iwm'
+            'ret_vs_spy', 'ret_vs_qqq', 'ret_vs_iwm',
+            'spy_dist_sma200', 'spy_rsi_14', 'spy_volatility'
         ]
         
         feats = df[feature_order].copy()
@@ -217,21 +236,29 @@ class MeanReversionStrategy:
                 logger.warning(f"[{ticker}] AI Inference failed: {e}")
 
         # ── Entry Logic ───────────────────────────────────────────────────────
-        # AI OVERRIDE: If the Deep Learning model is highly confident, bypass dumb math
+        # AI OVERRIDE: If the Deep Learning model is highly confident AND price is
+        # below the middle band (not at a local peak), bypass the strict BB crossover.
+        # We keep the "below basis" gate to prevent buying at the top of a range.
         if quant_engine and quant_engine.is_ai_active() and ai_win_prob >= 0.65:
-            # Need a TP target for the bot to execute against
-            target_tp = upper_band if self.tp_target_mode != "Fixed: Mean (Middle BB)" else basis
-            return {
-                "signal":          "BUY",
-                "price":           current_price,
-                "target_tp":       target_tp,
-                "rsi":             rsi,
-                "bb_pct_below":    0.0,
-                "atr":             atr,
-                "ai_win_prob":     ai_win_prob,
-                "fresh_break":     True,
-                "reason": f"🤖 AI High Conviction Buy (Prob: {ai_win_prob*100:.1f}%) {diag}"
-            }
+            if current_price < basis:  # Soft gate: must not be above the midline
+                # Need a TP target for the bot to execute against
+                target_tp = upper_band if self.tp_target_mode != "Fixed: Mean (Middle BB)" else basis
+                return {
+                    "signal":          "BUY",
+                    "price":           current_price,
+                    "target_tp":       target_tp,
+                    "rsi":             rsi,
+                    "bb_pct_below":    0.0,
+                    "atr":             atr,
+                    "ai_win_prob":     ai_win_prob,
+                    "fresh_break":     True,
+                    "reason": f"🤖 AI High Conviction Buy (Prob: {ai_win_prob*100:.1f}%, Price below basis) {diag}"
+                }
+            else:
+                logger.info(
+                    f"[{ticker}] 🤖 AI High Conviction ({ai_win_prob*100:.1f}%) but price "
+                    f"({current_price:.4f}) >= basis ({basis:.4f}). Waiting for pullback."
+                )
 
         # Require a FRESH crossover below the lower band (not just 'already below').
         # Previous candle must have closed AT or ABOVE the lower band, and the

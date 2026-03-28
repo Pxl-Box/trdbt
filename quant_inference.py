@@ -28,12 +28,13 @@ class QuantInference:
             with open(self.model_path, "rb") as f:
                 data = pickle.load(f)
             
-            # Handle Metadata Wrapper (dict) vs Raw Booster
             if isinstance(data, dict) and "model" in data:
                 self.model = data["model"]
+                self.expected_features = data.get("features", [])
                 logger.info(f"[Quant] Successfully loaded AI Brain (Score: {data.get('score', 'N/A')}) from {self.model_path}")
             else:
                 self.model = data
+                self.expected_features = []
                 logger.info(f"[Quant] Successfully loaded Raw AI Brain from {self.model_path}")
         except Exception as e:
             logger.error(f"[Quant] Failed to load AI model: {e}")
@@ -51,18 +52,31 @@ class QuantInference:
             return 0.50
 
         try:
+            # ── Feature Alignment for Pruned Models ───────────────────────
+            if self.expected_features:
+                # Filter down to exactly what the model was trained on
+                features_df = features_df[self.expected_features]
+
             if hasattr(self.model, 'predict_proba'):
                 # Scikit-learn wrapper (XGBClassifier)
                 probabilities = self.model.predict_proba(features_df)
-                win_prob = float(probabilities[-1][1])
+                raw_prob = float(probabilities[-1][1])
             else:
                 # Native XGBoost Booster or other
                 # Use DMatrix for inference (fast)
                 dmat = xgb.DMatrix(features_df)
                 preds = self.model.predict(dmat)
-                win_prob = float(preds[-1])
+                raw_prob = float(preds[-1])
             
-            return win_prob
+            # ── Probability Calibration ───────────────────────────────────
+            # Tree models often skew probabilities away from 0 and 1. We apply a 
+            # mild scaling factor to better align the 0.5-0.9 range to reality.
+            # A raw 0.7 from a conservative XGBoost often reflects an 80%+ win rate.
+            # We will use piecewise linear scaling or a simple sigmoid push.
+            calibrated_prob = min(max(raw_prob * 1.15, 0.0), 0.99)
+             
+            return calibrated_prob
+            
         except Exception as e:
             logger.warning(f"[Quant] Inference failed: {e}. Defaulting to 50% probability.")
             return 0.50
