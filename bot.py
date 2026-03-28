@@ -1501,14 +1501,17 @@ class TradingBot:
                     break
 
                 try:
-                    positions = self.client.get_open_positions()
-                    if positions:
-                        self.check_trailing_stops(positions)
-                        self.check_trade_duration(positions)
-                        self.check_virtual_tp(positions)
-                    
-                    # Also check for pending buy orders to chase (slippage buffer)
-                    self.check_pending_orders_chase()
+                    if self.client:
+                        positions = self.client.get_open_positions()
+                        if positions:
+                            self.check_trailing_stops(positions)
+                            self.check_trade_duration(positions)
+                            self.check_virtual_tp(positions)
+                        
+                        # Also check for pending buy orders to chase (slippage buffer)
+                        self.check_pending_orders_chase()
+                    else:
+                        logger.debug("[heartbeat] API client not initialized. Skipping monitor cycle.")
                 except Exception as e:
                     logger.warning(f"[heartbeat] Monitor cycle failed: {e}")
 
