@@ -27,7 +27,16 @@ class MeanReversionStrategy:
         The cycle interval should match (see cycle_interval_secs in config).
         """
         try:
+            # yfinance mapping overrides for international/ETF tickers
+            _MAPPING = {
+                "VUSA": "VUSA.L",
+                "EQQQ": "EQQQ.L",
+                "IUSA": "IUSA.L",
+            }
+            
             yf_ticker = ticker.split("_")[0]
+            yf_ticker = _MAPPING.get(yf_ticker, yf_ticker)
+            
             df = yf.download(yf_ticker, period=period, interval=interval, progress=False)
             if df.empty:
                 return df

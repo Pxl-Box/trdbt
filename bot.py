@@ -1301,8 +1301,24 @@ class TradingBot:
             # Ticker Health Check
             health = self.state.setdefault("ticker_health", {}).setdefault(ticker, {"error_count": 0, "is_paused": False})
             if health.get("is_paused"):
-                logger.info(f"[{ticker}] Ticker is PAUSED due to persistent errors. Skipping.")
-                continue
+                # Auto-resume logic: Retry paused tickers after 4 hours
+                paused_at_str = health.get("paused_at")
+                if paused_at_str:
+                    try:
+                        paused_at = datetime.fromisoformat(paused_at_str)
+                        hours_since = (datetime.now(timezone.utc) - paused_at).total_seconds() / 3600
+                        if hours_since >= 4:
+                            logger.info(f"[{ticker}] Ticker paused for {hours_since:.1f}h. Attempting automatic resume.")
+                            health["is_paused"] = False
+                            health["error_count"] = 0
+                        else:
+                            logger.info(f"[{ticker}] Ticker is PAUSED. {4 - hours_since:.1f}h remaining until auto-retry.")
+                            continue
+                    except Exception:
+                        continue # Keep paused if timestamp is corrupted
+                else:
+                    logger.info(f"[{ticker}] Ticker is PAUSED (no timestamp). Skipping.")
+                    continue
 
             # Per-ticker session check
             if not self.is_ticker_session_open(ticker):
@@ -1355,7 +1371,8 @@ class TradingBot:
                 health["last_error"]  = str(e)
                 if health["error_count"] >= 3:
                     health["is_paused"] = True
-                    logger.error(f"⚠️ [{ticker}] CRITICAL: 3 consecutive errors. PAUSING ticker for user review: {e}")
+                    health["paused_at"] = datetime.now(timezone.utc).isoformat()
+                    logger.error(f"⚠️ [{ticker}] CRITICAL: 3 consecutive errors. PAUSING ticker for 4h retry: {e}")
                 else:
                     logger.error(f"[{ticker}] Strategy error (attempt {health['error_count']}/3): {e}", exc_info=True)
                 
@@ -1501,7 +1518,10 @@ class TradingBot:
                     break
 
                 try:
-                    if self.client:
+                    # Only poll if we have something to monitor (saves API calls/prevents 429)
+                    tracking_active = bool(self.state.get("open_trades")) or bool(self.state.get("pending_orders"))
+                    
+                    if self.client and tracking_active:
                         positions = self.client.get_open_positions()
                         if positions:
                             self.check_trailing_stops(positions)
@@ -1510,6 +1530,8 @@ class TradingBot:
                         
                         # Also check for pending buy orders to chase (slippage buffer)
                         self.check_pending_orders_chase()
+                    elif not tracking_active:
+                        logger.debug("[heartbeat] No active trades/orders. Sleeping.")
                     else:
                         logger.debug("[heartbeat] API client not initialized. Skipping monitor cycle.")
                 except Exception as e:

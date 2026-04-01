@@ -66,10 +66,19 @@ class Trading212Client:
                     logger.debug(f"[API] {method} {endpoint} | Limit remaining: {rem}")
 
                 if resp.status_code in _RETRY_STATUSES and attempt < self.max_retries:
-                    wait = self.retry_delay * (2 ** (attempt - 1))
+                    # Respect Retry-After header if provided by T212
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait = float(retry_after)
+                        except ValueError:
+                            wait = self.retry_delay * (2 ** (attempt - 1))
+                    else:
+                        wait = self.retry_delay * (2 ** (attempt - 1))
+                    
                     logger.warning(
                         f"[{method} {endpoint}] HTTP {resp.status_code} – "
-                        f"retrying in {wait:.0f}s (attempt {attempt}/{self.max_retries})"
+                        f"retrying in {wait:.1f}s (attempt {attempt}/{self.max_retries})"
                     )
                     time.sleep(wait)
                     continue
