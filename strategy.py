@@ -37,7 +37,8 @@ class MeanReversionStrategy:
             yf_ticker = ticker.split("_")[0]
             yf_ticker = _MAPPING.get(yf_ticker, yf_ticker)
             
-            df = yf.download(yf_ticker, period=period, interval=interval, progress=False)
+            # Force threads=False to prevent multitasking/QThread conflicts on Windows
+            df = yf.download(yf_ticker, period=period, interval=interval, progress=False, threads=False)
             if df.empty:
                 return df
             if isinstance(df.columns, pd.MultiIndex):
@@ -191,29 +192,6 @@ class MeanReversionStrategy:
         prev_close      = float(previous['Close'])
         lower_band_prev = float(previous[bbl_col]) if bbl_col else prev_close
 
-        # Black Swan Volatility Filter
-        candle_range = latest['High'] - latest['Low']
-        if candle_range > 3 * atr:
-            logger.warning(f"BLACK SWAN AVOIDED: {ticker} candle range {candle_range:.2f} > 3x ATR ({atr:.2f})")
-            return {"signal": "BLOCK", "reason": f"High Volatility Black Swan {diag}"}
-
-        # Volume Confirmation Filter
-        if 'Volume' in df.columns:
-            avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
-            min_vol_pct = self.volume_min_pct
-            if avg_volume and avg_volume > 0 and latest['Volume'] < avg_volume * min_vol_pct:
-                logger.info(
-                    f"[{ticker}] Volume too low ({latest['Volume']:.0f} < "
-                    f"{avg_volume * min_vol_pct:.0f} = {min_vol_pct*100:.0f}% of avg). Skipping signal."
-                )
-                target_tp = basis if self.tp_target_mode != "Upper Band" else upper_band
-                return {
-                    "signal": "WAIT",
-                    "price": current_price,
-                    "target_tp": target_tp,
-                    "reason": f"Low volume – no conviction {diag}"
-                }
-
         # --- AI ML Inference (Node 3 Execution) ---
         ai_win_prob = 0.50
         if quant_engine and quant_engine.is_ai_active():
@@ -239,10 +217,37 @@ class MeanReversionStrategy:
                 
                 ai_win_prob = quant_engine.get_win_probability(feature_df)
                 
-                srs_spy = feature_df["ret_vs_spy_1d"].iloc[0]
+                srs_spy = float(feature_df["ret_vs_spy_1d"].iloc[0])
                 diag += f" [SRS vs SPY 1d: {srs_spy:+.4f}] [AI Prob: {ai_win_prob*100:.1f}%]"
             except Exception as e:
+                import traceback
+                print(f"DEBUG: AI Inference failed for {ticker}")
+                traceback.print_exc()
                 logger.warning(f"[{ticker}] AI Inference failed: {e}")
+
+        # Black Swan Volatility Filter
+        candle_range = latest['High'] - latest['Low']
+        if candle_range > 3 * atr:
+            logger.warning(f"BLACK SWAN AVOIDED: {ticker} candle range {candle_range:.2f} > 3x ATR ({atr:.2f})")
+            return {"signal": "BLOCK", "reason": f"High Volatility Black Swan {diag}", "ai_win_prob": ai_win_prob}
+
+        # Volume Confirmation Filter
+        if 'Volume' in df.columns:
+            avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
+            min_vol_pct = self.volume_min_pct
+            if avg_volume and avg_volume > 0 and latest['Volume'] < avg_volume * min_vol_pct:
+                logger.info(
+                    f"[{ticker}] Volume too low ({latest['Volume']:.0f} < "
+                    f"{avg_volume * min_vol_pct:.0f} = {min_vol_pct*100:.0f}% of avg). Skipping signal."
+                )
+                target_tp = basis if self.tp_target_mode != "Upper Band" else upper_band
+                return {
+                    "signal": "WAIT",
+                    "price": current_price,
+                    "target_tp": target_tp,
+                    "reason": f"Low volume – no conviction {diag}",
+                    "ai_win_prob": ai_win_prob
+                }
 
         # ── Entry Logic ───────────────────────────────────────────────────────
         # AI OVERRIDE: If the Deep Learning model is highly confident AND price is
@@ -261,7 +266,7 @@ class MeanReversionStrategy:
                     "atr":             atr,
                     "ai_win_prob":     ai_win_prob,
                     "fresh_break":     True,
-                    "reason": f"🤖 AI High Conviction Buy (Prob: {ai_win_prob*100:.1f}%, Price below basis) {diag}"
+                    "reason": f"AI High Conviction Buy (Prob: {ai_win_prob*100:.1f}%, Price below basis) {diag}"
                 }
             else:
                 logger.info(

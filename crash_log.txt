@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "C:\Users\Conor\Documents\GitHub\trdbt\scanner_desktop.py", line 325, in <module>
+    window = NativeTerminal()
+             ^^^^^^^^^^^^^^^^
+  File "C:\Users\Conor\Documents\GitHub\trdbt\scanner_desktop.py", line 158, in __init__
+    self.setup_ui()
+  File "C:\Users\Conor\Documents\GitHub\trdbt\scanner_desktop.py", line 202, in setup_ui
+    self.view_forecast.setHtml(placeholder)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'QLabel' object has no attribute 'setHtml'. Did you mean: 'setStyle'?

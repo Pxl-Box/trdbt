@@ -19,6 +19,29 @@ LOG_FILE    = "logs/bot.log"
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────
 
+def to_t212_ticker(ticker: str) -> str:
+    if "_" in ticker: return ticker
+    _US_ETFS = {"GDX", "GLD", "SLV", "ARKK", "VUSA", "QQQ", "SPY", "XLE", "XLK", "ICLN", "IBIT", "FBTC", "VUAG"}
+    t = ticker.upper()
+    if t.endswith(".L"): return f"{t.replace('.L', '')}_UK_EQ"
+    if t in _US_ETFS: return f"{t}_US_ETF"
+    return f"{t}_US_EQ"
+
+def clean_ticker(ticker: str) -> str:
+    return ticker.split("_")[0]
+
+def verify_ticker_on_yahoo(symbol: str):
+    import yfinance as yf
+    try:
+        if symbol == "SNDK":
+             return False, "SNDK was acquired by Western Digital. Please use 'WDC' instead."
+        test_data = yf.download(symbol, period="1d", progress=False, threads=False)
+        if test_data.empty:
+            return False, f"Ticker '{symbol}' not found on Yahoo Finance."
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
 def load_config():
     with open(CONFIG_FILE, "r") as f:
         return json.load(f)
@@ -380,29 +403,58 @@ def show_settings():
 
     # ── 5. Watchlist ─────────────────────────────────────────────────────
     with tab_watchlist:
-        tickers = list(st.session_state.tickers)
-        st.subheader(f"Watchlist ({len(tickers)} tickers)")
+        st.subheader("Manage Watchlist")
+        
+        # Mapping: Clean Name -> Full T212 Ticker
+        all_tickers = st.session_state.tickers
+        ticker_map = {clean_ticker(t): t for t in all_tickers}
+        clean_names = sorted(list(ticker_map.keys()))
 
-        if tickers:
-            cols = st.columns(5)
-            for i, t in enumerate(tickers):
-                if cols[i % 5].button(f"🗑️ {t}", key=f"del_{t}", use_container_width=True):
-                    st.session_state.tickers.remove(t)
-                    st.rerun()
-        else:
-            st.info("No tickers yet. Add some below.")
+        # Searchable Checkbox-style Multi-select
+        st.markdown("### Search & Batch Tools")
+        to_delete_names = st.multiselect(
+            "Select Tickers to Batch Delete",
+            options=clean_names,
+            placeholder="Search or Select Tickers..."
+        )
+        
+        if st.button("🗑️ Delete Selected", type="primary", use_container_width=True, disabled=not to_delete_names):
+            if st.checkbox(f"Confirm deleting {len(to_delete_names)} tickers?"):
+                for name in to_delete_names:
+                    full_sym = ticker_map[name]
+                    st.session_state.tickers.remove(full_sym)
+                st.success(f"Removed {len(to_delete_names)} tickers.")
+                st.rerun()
 
         st.markdown("---")
-        st.subheader("Add Ticker")
+        st.subheader("Add New Ticker")
         c1, c2 = st.columns([3, 1])
-        manual_in = c1.text_input("Ticker symbol", label_visibility="collapsed", placeholder="e.g. NVDA_US_EQ")
-        if c2.button("➕ Add", use_container_width=True) and manual_in.strip():
-            sym = manual_in.strip().upper()
-            if sym not in st.session_state.tickers:
-                st.session_state.tickers.append(sym)
-                st.rerun()
+        new_symbol_in = c1.text_input("Ticker (e.g. LITE)", label_visibility="collapsed", placeholder="Enter Ticker Symbol")
+        
+        if c2.button("🚀 Verify & Add", use_container_width=True):
+            sym = new_symbol_in.strip().upper()
+            if not sym:
+                st.warning("Enter a ticker.")
+            elif any(clean_ticker(t) == sym for t in st.session_state.tickers):
+                st.warning(f"{sym} is already in your watchlist.")
             else:
-                st.warning(f"{sym} already in watchlist.")
+                with st.spinner(f"Verifying {sym} on Yahoo..."):
+                    is_valid, msg = verify_ticker_on_yahoo(sym)
+                    if is_valid:
+                        full_ticker = to_t212_ticker(sym)
+                        st.session_state.tickers.append(full_ticker)
+                        st.success(f"Added {sym} ({full_ticker})")
+                        st.rerun()
+                    else:
+                        st.error(f"Failed: {msg}")
+
+        st.markdown("---")
+        st.subheader("Current Portfolio View")
+        if clean_names:
+            st.info(f"Showing {len(clean_names)} clean tickers. Hover to see T212 format.")
+            st.columns(6)[0].write(", ".join(clean_names))
+        else:
+            st.info("Watchlist is empty.")
 
         st.markdown("---")
         st.subheader("🌡️ Ticker Health")
