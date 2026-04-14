@@ -804,6 +804,7 @@ class TradingBot:
                     "sl_order_id":  sl_id,
                     "sl_price":     stop_loss_price,
                     "tp_price":     float(target_tp) if target_tp else None,  # Virtual TP
+                    "ai_win_prob":  float(signal_data.get("ai_win_prob", 0.5)),
                     "t212_ticker":  t212_ticker,
                     "opened_at":    datetime.now(timezone.utc).isoformat()
                 }

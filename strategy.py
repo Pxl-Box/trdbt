@@ -254,7 +254,8 @@ class MeanReversionStrategy:
         # below the middle band (not at a local peak), bypass the strict BB crossover.
         # We keep the "below basis" gate to prevent buying at the top of a range.
         if quant_engine and quant_engine.is_ai_active() and ai_win_prob >= 0.65:
-            if current_price < basis:  # Soft gate: must not be above the midline
+            mid_low = lower_band + (basis - lower_band) * 0.5
+            if current_price < mid_low:
                 # Need a TP target for the bot to execute against
                 target_tp = upper_band if self.tp_target_mode != "Fixed: Mean (Middle BB)" else basis
                 return {
@@ -266,12 +267,12 @@ class MeanReversionStrategy:
                     "atr":             atr,
                     "ai_win_prob":     ai_win_prob,
                     "fresh_break":     True,
-                    "reason": f"AI High Conviction Buy (Prob: {ai_win_prob*100:.1f}%, Price below basis) {diag}"
+                    "reason": f"AI High Conviction Buy (Prob: {ai_win_prob*100:.1f}%, Price in bottom range) {diag}"
                 }
             else:
                 logger.info(
                     f"[{ticker}] 🤖 AI High Conviction ({ai_win_prob*100:.1f}%) but price "
-                    f"({current_price:.4f}) >= basis ({basis:.4f}). Waiting for pullback."
+                    f"({current_price:.4f}) >= entry zone ({mid_low:.4f}). Waiting for deeper pullback."
                 )
 
         # Require a FRESH crossover below the lower band (not just 'already below').
